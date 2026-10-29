@@ -92,8 +92,16 @@ unsafe extern "system" fn low_level_keyboard_proc(
     match kbd.vkCode as u16 {
         VK_BACK => {
             let mut state = GLOBAL_STATE.lock().unwrap();
-            state.engine.handle_backspace();
-            return CallNextHookEx(null_mut(), code, wparam, lparam);
+            let bs_action = state.engine.handle_backspace();
+            drop(state);
+
+            if let Some(KeyAction::Transform { backspaces, text }) = bs_action {
+                send_backspaces(backspaces);
+                send_unicode_str(&text);
+                return 1;
+            } else {
+                return CallNextHookEx(null_mut(), code, wparam, lparam);
+            }
         }
         VK_RETURN | VK_ESCAPE | VK_TAB | VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_HOME
         | VK_END | VK_PRIOR | VK_NEXT => {

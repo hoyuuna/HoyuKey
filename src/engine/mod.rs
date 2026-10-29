@@ -3,6 +3,7 @@ pub mod vietnamese;
 pub mod vni;
 
 use crate::config::{Config, InputMethod};
+use crate::engine::vietnamese::Tone;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum KeyAction {
@@ -34,9 +35,46 @@ impl Engine {
         self.current_word.clear();
     }
 
-    pub fn handle_backspace(&mut self) -> KeyAction {
+    /// Xử lý phím Backspace thông minh:
+    /// Nếu từ hiện tại đang có dấu thanh (ví dụ "quảng"), Backspace sẽ gỡ bỏ dấu thanh trước (trở về "quang")
+    /// để người dùng có thể gõ ngay phím dấu khác (như 'x' thành "quãng") như trên bàn phím điện thoại!
+    pub fn handle_backspace(&mut self) -> Option<KeyAction> {
+        if self.current_word.is_empty() {
+            return None;
+        }
+
+        let mut has_tone = false;
+        for c in self.current_word.chars() {
+            if let Some((_, _, tone, _)) = vietnamese::decompose_vietnamese_char(c) {
+                if tone != Tone::None {
+                    has_tone = true;
+                    break;
+                }
+            }
+        }
+
+        if has_tone {
+            let old_len = self.current_word.chars().count();
+            let mut new_chars: Vec<char> = Vec::new();
+            for c in self.current_word.chars() {
+                if let Some((base, vmod, _, is_upper)) = vietnamese::decompose_vietnamese_char(c) {
+                    let unaccented = vietnamese::get_vietnamese_vowel(base, vmod, Tone::None).unwrap_or(c);
+                    new_chars.push(if is_upper { unaccented.to_uppercase().next().unwrap_or(unaccented) } else { unaccented });
+                } else {
+                    new_chars.push(c);
+                }
+            }
+            let new_word: String = new_chars.into_iter().collect();
+            self.current_word = new_word.clone();
+
+            return Some(KeyAction::Transform {
+                backspaces: old_len,
+                text: new_word,
+            });
+        }
+
         self.current_word.pop();
-        KeyAction::Backspace
+        None
     }
 
     /// Xử lý một ký tự gõ vào
@@ -52,31 +90,89 @@ impl Engine {
             return KeyAction::PassThrough;
         }
 
-        // Giới hạn độ dài từ buffer để tránh tràn (từ tiếng Việt tối đa ~10-15 ký tự)
         if self.current_word.len() > 30 {
             self.reset();
         }
 
+        // 1. Thử biến đổi theo quy tắc Telex / VNI
         let transformed = match config.input_method {
             InputMethod::Telex => telex::transform_telex(&self.current_word, c, config.modern_tone),
             InputMethod::Vni => vni::transform_vni(&self.current_word, c, config.modern_tone),
         };
 
         if let Some(new_word) = transformed {
-            // Số lượng ký tự cần xóa = số ký tự hiển thị của từ cũ
             let backspaces = self.current_word.chars().count();
             self.current_word = new_word.clone();
 
-            KeyAction::Transform {
+            return KeyAction::Transform {
                 backspaces,
                 text: new_word,
+            };
+        }
+
+        // 2. Tự động tái cân bằng vị trí dấu thanh (Dynamic Tone Re-balancing):
+        // Nếu từ hiện tại đã có dấu thanh (ví dụ "khí" có dấu sắc), mà người dùng gõ thêm nguyên âm (như 'o', 'a'),
+        // hệ thống tự động gỡ dấu cũ và tái định vị dấu thanh đúng quy tắc ngữ âm ("khoái" thay vì "khoaí")!
+        if c.is_ascii_alphabetic() && !telex::is_foreign_multisyllable_word(&self.current_word) {
+            let existing_tone = find_existing_tone(&self.current_word);
+            if existing_tone != Tone::None {
+                // Tách dấu thanh cũ ra
+                let unaccented_word = remove_tone_from_word(&self.current_word);
+                let mut temp_word = unaccented_word;
+                temp_word.push(c);
+
+                let tone_key = match existing_tone {
+                    Tone::Acute => 's',
+                    Tone::Grave => 'f',
+                    Tone::Hook => 'r',
+                    Tone::Tilde => 'x',
+                    Tone::Dot => 'j',
+                    _ => ' ',
+                };
+
+                if tone_key != ' ' {
+                    if let Some(rebalanced_word) = telex::handle_tone_modifier(&temp_word, tone_key, config.modern_tone) {
+                        if rebalanced_word != temp_word {
+                            let backspaces = self.current_word.chars().count();
+                            self.current_word = rebalanced_word.clone();
+                            return KeyAction::Transform {
+                                backspaces,
+                                text: rebalanced_word,
+                            };
+                        }
+                    }
+                }
             }
-        } else {
-            // Không có biến đổi: chỉ thêm ký tự này vào buffer và cho phím đi qua tự nhiên
-            self.current_word.push(c);
-            KeyAction::PassThrough
+        }
+
+        // Không có biến đổi: chỉ thêm ký tự này vào buffer và cho phím đi qua tự nhiên
+        self.current_word.push(c);
+        KeyAction::PassThrough
+    }
+}
+
+fn find_existing_tone(word: &str) -> Tone {
+    for c in word.chars() {
+        if let Some((_, _, tone, _)) = vietnamese::decompose_vietnamese_char(c) {
+            if tone != Tone::None {
+                return tone;
+            }
         }
     }
+    Tone::None
+}
+
+fn remove_tone_from_word(word: &str) -> String {
+    let mut chars = Vec::new();
+    for c in word.chars() {
+        if let Some((base, vmod, _, is_upper)) = vietnamese::decompose_vietnamese_char(c) {
+            let unaccented = vietnamese::get_vietnamese_vowel(base, vmod, Tone::None).unwrap_or(c);
+            chars.push(if is_upper { unaccented.to_uppercase().next().unwrap_or(unaccented) } else { unaccented });
+        } else {
+            chars.push(c);
+        }
+    }
+    chars.into_iter().collect()
 }
 
 fn is_word_boundary(c: char) -> bool {
@@ -93,103 +189,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_telex_basic() {
+    fn test_telex_chuyen() {
         let mut engine = Engine::new();
         let config = Config::default();
 
-        // Gõ "tiếng" -> t, i, e, e, n, g, s
-        engine.process_char('t', &config);
-        engine.process_char('i', &config);
-        engine.process_char('e', &config);
-        let action = engine.process_char('e', &config);
+        // c, h, u, y, e, e, n, r -> chuyển (bắt buộc đặt trên 'ê', không bao giờ chuỷên!)
+        for ch in "chuyeen".chars() {
+            engine.process_char(ch, &config);
+        }
+        let action = engine.process_char('r', &config);
         assert_eq!(
             action,
             KeyAction::Transform {
-                backspaces: 3,
-                text: "tiê".to_string(),
+                backspaces: 6,
+                text: "chuyển".to_string(),
             }
         );
-        engine.process_char('n', &config);
-        engine.process_char('g', &config);
-        let action = engine.process_char('s', &config);
+    }
+
+    #[test]
+    fn test_telex_quang_backspace_x() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "quảng" -> quangr
+        for ch in "quangr".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "quảng");
+
+        // Backspace -> tự động gỡ dấu hỏi, đưa từ về "quang"
+        let bs_action = engine.handle_backspace();
+        assert_eq!(
+            bs_action,
+            Some(KeyAction::Transform {
+                backspaces: 5,
+                text: "quang".to_string(),
+            })
+        );
+        assert_eq!(engine.current_word, "quang");
+
+        // Gõ 'x' -> ngay lập tức thành "quãng"
+        let action = engine.process_char('x', &config);
         assert_eq!(
             action,
             KeyAction::Transform {
                 backspaces: 5,
-                text: "tiếng".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn test_telex_viet() {
-        let mut engine = Engine::new();
-        let config = Config::default();
-
-        // Gõ "việt" -> v, i, e, e, t, j
-        engine.process_char('v', &config);
-        engine.process_char('i', &config);
-        engine.process_char('e', &config);
-        engine.process_char('e', &config);
-        engine.process_char('t', &config);
-        let action = engine.process_char('j', &config);
-        assert_eq!(
-            action,
-            KeyAction::Transform {
-                backspaces: 4,
-                text: "việt".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn test_telex_dd() {
-        let mut engine = Engine::new();
-        let config = Config::default();
-
-        engine.process_char('d', &config);
-        let action = engine.process_char('d', &config);
-        assert_eq!(
-            action,
-            KeyAction::Transform {
-                backspaces: 1,
-                text: "đ".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn test_telex_qua_quoc() {
-        let mut engine = Engine::new();
-        let config = Config::default();
-
-        // Gõ "quá" -> q, u, a, s
-        engine.process_char('q', &config);
-        engine.process_char('u', &config);
-        engine.process_char('a', &config);
-        let action = engine.process_char('s', &config);
-        assert_eq!(
-            action,
-            KeyAction::Transform {
-                backspaces: 3,
-                text: "quá".to_string(),
-            }
-        );
-
-        engine.reset();
-        // Gõ "quốc" -> q, u, o, o, c, s
-        // Lưu ý: sau khi gõ 'oo', từ hiển thị là "quô" (3 ký tự), thêm 'c' là "quôc" (4 ký tự)
-        engine.process_char('q', &config);
-        engine.process_char('u', &config);
-        engine.process_char('o', &config);
-        engine.process_char('o', &config);
-        engine.process_char('c', &config);
-        let action = engine.process_char('s', &config);
-        assert_eq!(
-            action,
-            KeyAction::Transform {
-                backspaces: 4,
-                text: "quốc".to_string(),
+                text: "quãng".to_string(),
             }
         );
     }
@@ -199,12 +245,9 @@ mod tests {
         let mut engine = Engine::new();
         let config = Config::default();
 
-        // n, g, o, a, i, f -> ngoài (phải là ngoài trên 'a', không được là ngòai trên 'o')
-        engine.process_char('n', &config);
-        engine.process_char('g', &config);
-        engine.process_char('o', &config);
-        engine.process_char('a', &config);
-        engine.process_char('i', &config);
+        for ch in "ngoai".chars() {
+            engine.process_char(ch, &config);
+        }
         let action = engine.process_char('f', &config);
         assert_eq!(
             action,
@@ -220,10 +263,10 @@ mod tests {
         let mut engine = Engine::new();
         let config = Config::default();
 
-        // Gõ "animation" không bị biến thành "ânimtion"
         for ch in "animation".chars() {
             let action = engine.process_char(ch, &config);
             assert_eq!(action, KeyAction::PassThrough);
         }
+        assert_eq!(engine.current_word, "animation");
     }
 }

@@ -4,8 +4,8 @@ use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, POINT, RECT
 use windows_sys::Win32::Graphics::Gdi::{
     AlphaBlend, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection,
     CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, Ellipse, EndPaint,
-    InvalidateRect, RoundRect, ScreenToClient, SelectObject, SetBkMode, SetTextColor,
-    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+    InvalidateRect, RoundRect, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
+    SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
     DIB_RGB_COLORS, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, PS_SOLID,
     SRCCOPY, TRANSPARENT,
 };
@@ -39,7 +39,7 @@ const LOGO_BGRA_48: &[u8] = include_bytes!("../icon/logo_48.bin");
 // Bảng màu Shadcn UI Dark Mode (Zinc Palette chuẩn, tương phản cao, dịu mắt)
 const COLOR_BG: u32 = 0x0C0909;             // #09090c
 const COLOR_CARD_BG: u32 = 0x161313;        // #131316
-const COLOR_CARD_BORDER: u32 = 0x2E2727;    // #27272e
+const COLOR_CARD_BORDER: u32 = 0x2A2424;    // #24242a viền tinh tế 1px
 const COLOR_TEXT_PRIMARY: u32 = 0xF8F6F6;   // #f6f6f8 (trắng sáng sắc nét)
 const COLOR_TEXT_MUTED: u32 = 0x9D9494;     // #94949d (xám zinc chuẩn)
 const COLOR_STATUS_GREEN: u32 = 0x5EC522;   // #22c55e
@@ -65,8 +65,8 @@ pub fn create_settings_window(hinstance: HMODULE) -> HWND {
 
         RegisterClassW(&wnd_class);
 
-        // Kích thước rộng rãi chuẩn thiết kế: 546 x 660
-        let width = 546;
+        // Kích thước chuẩn lưới thiết kế: 540 x 660
+        let width = 540;
         let height = 660;
         let screen_w = GetSystemMetrics(SM_CXSCREEN);
         let screen_h = GetSystemMetrics(SM_CYSCREEN);
@@ -225,18 +225,18 @@ fn step_anim(current: f32, target: f32) -> f32 {
 }
 
 fn is_clickable_area(x: i32, y: i32) -> bool {
-    // Kiểu gõ Telex / VNI
-    (x >= 300 && x <= 496 && y >= 96 && y <= 146)
+    // Kiểu gõ Telex / VNI (căn chuẩn mép phải 492)
+    (x >= 296 && x <= 492 && y >= 100 && y <= 146)
     // Switch Bỏ dấu kiểu mới
-    || (x >= 424 && x <= 490 && y >= 195 && y <= 235)
+    || (x >= 440 && x <= 494 && y >= 198 && y <= 234)
     // Switch Tự động khôi phục phím
-    || (x >= 424 && x <= 490 && y >= 268 && y <= 308)
-    // Phím tắt Ctrl+Shift / Alt+Z
-    || (x >= 270 && x <= 496 && y >= 356 && y <= 406)
+    || (x >= 440 && x <= 494 && y >= 270 && y <= 306)
+    // Phím tắt Ctrl+Shift / Alt+Z (căn chuẩn mép phải 492)
+    || (x >= 280 && x <= 492 && y >= 348 && y <= 394)
     // Nút Thoát
-    || (x >= 28 && x <= 168 && y >= 540 && y <= 585)
+    || (x >= 28 && x <= 168 && y >= 530 && y <= 572)
     // Nút Đóng
-    || (x >= 342 && x <= 502 && y >= 540 && y <= 585)
+    || (x >= 352 && x <= 512 && y >= 530 && y <= 572)
 }
 
 fn handle_mouse_click(hwnd: HWND, x: i32, y: i32) {
@@ -244,13 +244,13 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32) {
     let mut changed = false;
 
     // 1. Click Tab Kiểu gõ (Telex / VNI)
-    if y >= 96 && y <= 146 {
-        if x >= 300 && x <= 394 {
+    if y >= 100 && y <= 146 {
+        if x >= 296 && x <= 392 {
             if state.config.input_method != InputMethod::Telex {
                 state.config.input_method = InputMethod::Telex;
                 changed = true;
             }
-        } else if x >= 398 && x <= 496 {
+        } else if x >= 396 && x <= 492 {
             if state.config.input_method != InputMethod::Vni {
                 state.config.input_method = InputMethod::Vni;
                 changed = true;
@@ -259,25 +259,25 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32) {
     }
 
     // 2. Click Switch Bỏ dấu kiểu mới
-    if x >= 424 && x <= 490 && y >= 195 && y <= 235 {
+    if x >= 440 && x <= 494 && y >= 198 && y <= 234 {
         state.config.modern_tone = !state.config.modern_tone;
         changed = true;
     }
 
     // 3. Click Switch Tự động khôi phục phím
-    if x >= 424 && x <= 490 && y >= 268 && y <= 308 {
+    if x >= 440 && x <= 494 && y >= 270 && y <= 306 {
         state.config.auto_restore = !state.config.auto_restore;
         changed = true;
     }
 
     // 4. Click Tab Phím tắt (Ctrl+Shift / Alt+Z)
-    if y >= 356 && y <= 406 {
-        if x >= 270 && x <= 378 {
+    if y >= 348 && y <= 394 {
+        if x >= 280 && x <= 384 {
             if state.config.switch_key != SwitchKey::CtrlShift {
                 state.config.switch_key = SwitchKey::CtrlShift;
                 changed = true;
             }
-        } else if x >= 382 && x <= 496 {
+        } else if x >= 388 && x <= 492 {
             if state.config.switch_key != SwitchKey::AltZ {
                 state.config.switch_key = SwitchKey::AltZ;
                 changed = true;
@@ -286,7 +286,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32) {
     }
 
     // 5. Nút Thoát HoyuKey
-    if x >= 28 && x <= 168 && y >= 540 && y <= 585 {
+    if x >= 28 && x <= 168 && y >= 530 && y <= 572 {
         drop(state);
         unsafe {
             PostQuitMessage(0);
@@ -295,7 +295,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32) {
     }
 
     // 6. Nút Đóng (Ẩn về khay)
-    if x >= 342 && x <= 502 && y >= 540 && y <= 585 {
+    if x >= 352 && x <= 512 && y >= 530 && y <= 572 {
         drop(state);
         unsafe {
             ShowWindow(hwnd, SW_HIDE);
@@ -324,8 +324,9 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     DeleteObject(bg_brush);
 
     SetBkMode(dc, TRANSPARENT as _);
+    SetBkColor(dc, COLOR_CARD_BG);
 
-    // Chuẩn hóa typography với Segoe UI chất lượng cao CLEARTYPE_NATURAL
+    // Typography chất lượng cao: Segoe UI với CLEARTYPE_NATURAL_QUALITY
     let font_title = create_font(22, 700);
     let font_bold = create_font(14, 600);
     let font_body = create_font(13, 400);
@@ -333,80 +334,77 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     let font_badge = create_font(11, 600);
 
     // 2. Header
-    // Vẽ logo.png 48x48 của người dùng bằng AlphaBlend
     draw_bgra_image(dc, 28, 22, 48, 48, LOGO_BGRA_48);
 
-    // Tiêu đề
     SelectObject(dc, font_title);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
     draw_text(dc, "HoyuKey", 88, 22);
 
-    // Badge "Pre-release"
     draw_rounded_card(dc, 192, 27, 88, 20, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
     SelectObject(dc, font_badge);
     SetTextColor(dc, COLOR_TEXT_MUTED);
     draw_centered_text(dc, "Pre-release", 192, 27, 88, 20);
 
-    // Subtitle
     SelectObject(dc, font_body);
     SetTextColor(dc, COLOR_TEXT_MUTED);
     draw_text(dc, "Bộ gõ Tiếng Việt thế hệ mới cho PC", 88, 49);
 
-    let card_w = 474;
+    let card_x = 28;
+    let card_w = 484; // Căn thẳng hàng hoàn hảo mép trái 28, mép phải 512
 
     // 3. Card 1: Kiểu gõ chính (Telex / VNI)
-    draw_rounded_card(dc, 28, 86, card_w, 76, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    draw_rounded_card(dc, card_x, 86, card_w, 76, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
     SelectObject(dc, font_bold);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
-    draw_text(dc, "Kiểu gõ chính", 48, 102);
+    draw_text(dc, "Kiểu gõ chính", 48, 104);
     SelectObject(dc, font_small);
     SetTextColor(dc, COLOR_TEXT_MUTED);
     draw_text(dc, "Chọn phương thức gõ Telex hoặc VNI", 48, 126);
 
-    // Segmented Tabs có HOẠT HỌA TRƯỢT êm ái
     let method_progress = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
     draw_animated_tabs(
         dc,
-        308,
-        100,
+        296, // Căn chuẩn mép phải = 296 + 196 = 492
+        102,
         &["Telex", "VNI"],
+        94,
         method_progress,
         font_bold,
     );
 
     // 4. Card 2: Tùy chọn gõ dấu
-    draw_rounded_card(dc, 28, 174, card_w, 148, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    draw_rounded_card(dc, card_x, 174, card_w, 148, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
 
     // Row 1: Bỏ dấu kiểu mới
     SelectObject(dc, font_bold);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
-    draw_text(dc, "Bỏ dấu kiểu mới", 48, 192);
+    draw_text(dc, "Bỏ dấu kiểu mới", 48, 194);
     SelectObject(dc, font_small);
     SetTextColor(dc, COLOR_TEXT_MUTED);
-    draw_text(dc, "Đặt dấu ở âm thứ hai: hóa, hòa thay vì hoá, hoà", 48, 214);
+    draw_text(dc, "Đặt dấu ở âm thứ hai: hóa, hòa thay vì hoá, hoà", 48, 216);
 
     let tone_progress = MODERN_TONE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-    draw_animated_switch(dc, 434, 200, tone_progress);
+    draw_animated_switch(dc, 444, 202, tone_progress); // Căn chuẩn mép phải 444 + 48 = 492
 
-    // Đường ngăn cách tinh tế
-    draw_divider(dc, 48, 248, card_w - 40);
+    // Đường ngăn cách căn chuẩn mép trái 48, mép phải 492
+    draw_divider(dc, 48, 248, 444);
 
     // Row 2: Tự động khôi phục phím
     SelectObject(dc, font_bold);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
-    draw_text(dc, "Tự động khôi phục phím", 48, 264);
+    draw_text(dc, "Tự động khôi phục phím", 48, 266);
     SelectObject(dc, font_small);
     SetTextColor(dc, COLOR_TEXT_MUTED);
-    draw_text(dc, "Khôi phục ký tự gốc khi gõ lặp dấu hoặc từ sai", 48, 286);
+    draw_text(dc, "Khôi phục ký tự gốc khi gõ lặp dấu hoặc từ sai", 48, 288);
 
     let restore_progress = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-    draw_animated_switch(dc, 434, 272, restore_progress);
+    draw_animated_switch(dc, 444, 274, restore_progress); // Căn chuẩn mép phải 444 + 48 = 492
 
     // 5. Card 3: Phím tắt chuyển đổi
-    draw_rounded_card(dc, 28, 334, card_w, 76, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    draw_rounded_card(dc, card_x, 334, card_w, 76, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
     SelectObject(dc, font_bold);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
-    draw_text(dc, "Phím tắt chuyển đổi", 48, 350);
+    draw_text(dc, "Phím tắt chuyển đổi", 48, 352);
     SelectObject(dc, font_small);
     SetTextColor(dc, COLOR_TEXT_MUTED);
     draw_text(dc, "Đổi nhanh giữa Tiếng Việt (V) và Anh (E)", 48, 374);
@@ -414,20 +412,21 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     let switch_progress = SWITCH_KEY_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
     draw_animated_tabs(
         dc,
-        284,
-        348,
+        280, // Căn chuẩn mép phải = 280 + 212 = 492
+        350,
         &["Ctrl + Shift", "Alt + Z"],
+        102,
         switch_progress,
         font_bold,
     );
 
     // 6. Card 4: Trạng thái hệ thống
-    draw_rounded_card(dc, 28, 422, card_w, 72, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    draw_rounded_card(dc, card_x, 422, card_w, 72, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
     let dot_brush = CreateSolidBrush(if config.enabled { COLOR_STATUS_GREEN } else { COLOR_TEXT_MUTED });
     let dot_pen = CreatePen(PS_SOLID as _, 1, if config.enabled { COLOR_STATUS_GREEN } else { COLOR_TEXT_MUTED });
     let old_brush = SelectObject(dc, dot_brush);
     let old_pen = SelectObject(dc, dot_pen);
-    Ellipse(dc, 48, 452, 60, 464);
+    Ellipse(dc, 48, 453, 58, 463);
     SelectObject(dc, old_brush);
     SelectObject(dc, old_pen);
     DeleteObject(dot_brush);
@@ -440,26 +439,24 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     } else {
         "Trạng thái: Đang tắt Tiếng Việt [E]"
     };
-    draw_text(dc, status_str, 70, 438);
+    draw_text(dc, status_str, 68, 438);
 
     SelectObject(dc, font_small);
     SetTextColor(dc, COLOR_TEXT_MUTED);
-    draw_text(dc, "Nhấn phím tắt hoặc click khay hệ thống để đổi chế độ", 70, 462);
+    draw_text(dc, "Nhấn phím tắt hoặc click khay hệ thống để đổi chế độ", 68, 462);
 
-    // 7. Footer Buttons
-    // Nút Thoát HoyuKey
-    draw_rounded_card(dc, 28, 526, 140, 42, 8, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    // 7. Footer Buttons: Căn thẳng hàng tuyệt đối với hai cạnh của Cards
+    // Cạnh trái: 28, Cạnh phải: 512
+    draw_rounded_card(dc, 28, 530, 140, 42, 8, COLOR_CARD_BG, COLOR_CARD_BORDER);
     SelectObject(dc, font_bold);
     SetTextColor(dc, COLOR_BTN_DANGER);
-    draw_centered_text(dc, "Thoát HoyuKey", 28, 526, 140, 42);
+    draw_centered_text(dc, "Thoát HoyuKey", 28, 530, 140, 42);
 
-    // Nút Đóng (Ẩn về khay)
-    draw_rounded_card(dc, 342, 526, 160, 42, 8, 0xFAFAFA, 0xFAFAFA);
+    draw_rounded_card(dc, 352, 530, 160, 42, 8, 0xFAFAFA, 0xFAFAFA);
     SelectObject(dc, font_bold);
     SetTextColor(dc, 0x0C0909);
-    draw_centered_text(dc, "Đóng (Ẩn về khay)", 342, 526, 160, 42);
+    draw_centered_text(dc, "Đóng (Ẩn về khay)", 352, 530, 160, 42);
 
-    // Dọn dẹp fonts
     DeleteObject(font_title);
     DeleteObject(font_bold);
     DeleteObject(font_body);
@@ -467,18 +464,17 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     DeleteObject(font_badge);
 }
 
-/// Vẽ công tắc gạt với 2 màu ĐEN & TRẮNG tương phản cực chuẩn kèm hoạt họa mượt mà
 unsafe fn draw_animated_switch(
     dc: windows_sys::Win32::Graphics::Gdi::HDC,
     x: i32,
     y: i32,
-    progress: f32, // 0.0 (OFF) -> 1.0 (ON)
+    progress: f32,
 ) {
     let w = 48;
     let h = 26;
     let radius = 13;
 
-    // Rãnh (Track): OFF là Đen than #18181b, ON là Trắng tinh #ffffff
+    // Rãnh: OFF là Đen #18181b, ON là Trắng tinh #ffffff
     let r_track = (24.0 + (255.0 - 24.0) * progress).round() as u8;
     let g_track = (24.0 + (255.0 - 24.0) * progress).round() as u8;
     let b_track = (27.0 + (255.0 - 27.0) * progress).round() as u8;
@@ -491,7 +487,7 @@ unsafe fn draw_animated_switch(
 
     draw_rounded_card(dc, x, y, w, h, radius, color_track, color_border);
 
-    // Chấm tròn (Thumb / Knob): OFF là Trắng #fafafa, ON là Đen #09090b
+    // Chấm tròn: OFF là Trắng #fafafa, ON là Đen #09090b
     let knob_diameter = 20;
     let knob_min_x = x + 3;
     let knob_max_x = x + w - knob_diameter - 3;
@@ -516,24 +512,21 @@ unsafe fn draw_animated_switch(
     DeleteObject(knob_pen);
 }
 
-/// Vẽ Segmented Tabs có thanh trắng TRƯỢT MƯỢT MÀ (Sliding Pill Animation) giữa 2 lựa chọn
 unsafe fn draw_animated_tabs(
     dc: windows_sys::Win32::Graphics::Gdi::HDC,
     x: i32,
     y: i32,
     tabs: &[&str; 2],
-    progress: f32, // 0.0 (Tab 1) -> 1.0 (Tab 2)
+    tab_w: i32,
+    progress: f32,
     font: HFONT,
 ) {
-    let tab_w = 90;
     let tab_h = 36;
     let total_w = tab_w * 2 + 8;
     let total_h = tab_h + 8;
 
-    // Nền container
     draw_rounded_card(dc, x, y, total_w, total_h, 8, 0x1B1818, COLOR_CARD_BORDER);
 
-    // Pill trắng trượt mượt mà theo giá trị progress
     let pill_min_x = x + 4;
     let pill_max_x = x + 4 + tab_w;
     let pill_curr_x = (pill_min_x as f32 + (pill_max_x - pill_min_x) as f32 * progress).round() as i32;
@@ -543,12 +536,10 @@ unsafe fn draw_animated_tabs(
 
     SelectObject(dc, font);
 
-    // Tab 1 text
     let t1_is_selected = progress < 0.5;
     SetTextColor(dc, if t1_is_selected { 0x0C0909 } else { 0xA1A1AA });
     draw_centered_text(dc, tabs[0], x + 4, y + 4, tab_w, tab_h);
 
-    // Tab 2 text
     let t2_is_selected = progress >= 0.5;
     SetTextColor(dc, if t2_is_selected { 0x0C0909 } else { 0xA1A1AA });
     draw_centered_text(dc, tabs[1], x + 4 + tab_w, y + 4, tab_w, tab_h);
@@ -637,7 +628,6 @@ unsafe fn draw_centered_text(
     );
 }
 
-/// Vẽ ảnh 32-bit BGRA có hỗ trợ trong suốt alpha bằng AlphaBlend
 unsafe fn draw_bgra_image(
     hdc_dest: windows_sys::Win32::Graphics::Gdi::HDC,
     dest_x: i32,
@@ -649,7 +639,7 @@ unsafe fn draw_bgra_image(
     let mut bmi: BITMAPINFO = std::mem::zeroed();
     bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
     bmi.bmiHeader.biWidth = w;
-    bmi.bmiHeader.biHeight = -h; // Top-down
+    bmi.bmiHeader.biHeight = -h;
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
@@ -699,10 +689,10 @@ unsafe fn create_font(size: i32, weight: i32) -> HFONT {
         0,
         0,
         0,
-        1, // DEFAULT_CHARSET
+        1,
         0,
         0,
-        5, // CLEARTYPE_NATURAL_QUALITY (khử răng cưa tối đa, font mượt mịn tuyệt đối)
+        5, // CLEARTYPE_NATURAL_QUALITY
         0,
         face_name.as_ptr(),
     )

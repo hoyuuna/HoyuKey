@@ -33,8 +33,14 @@ jobs:
       - name: Run Tests
         run: cargo test --verbose
 
-      - name: Build Release Binary
-        run: cargo build --release
+      - name: Compile Resource & Build Release Binary
+        shell: powershell
+        run: |
+          $rcExe = (Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio" -Filter rc.exe -Recurse | Where-Object { $_.FullName -like "*x64*" } | Select-Object -First 1).FullName
+          Write-Host "Using Windows Resource Compiler: $rcExe"
+          & $rcExe /fo app.res app.rc
+          $env:RUSTFLAGS = "-C link-arg=app.res"
+          cargo build --release
 
       - name: Prepare Binary
         shell: powershell
@@ -65,7 +71,7 @@ jobs:
             - **Build**: #${{ github.run_number }}
 
             #### 📦 Tải về:
-            - **`HoyuKey.exe`**: Tải về và nhấp đúp để chạy trực tiếp trên Windows (không cần cài đặt).
+            - **`HoyuKey.exe`**: Tải về và nhấp đúp để chạy trực tiếp trên Windows (đã tích hợp icon ứng dụng và hỗ trợ màn hình 4K sắc nét).
           prerelease: true
           draft: false
           files: |
