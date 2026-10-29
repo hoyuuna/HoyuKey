@@ -150,15 +150,12 @@ unsafe extern "system" fn tray_wnd_proc(
             let event = lparam as u32;
             match event {
                 WM_LBUTTONUP => {
-                    // Click chuột trái vào tray icon: chuyển đổi qua lại giữa V và E
                     hook::toggle_vietnamese_mode();
                 }
                 WM_LBUTTONDBLCLK => {
-                    // Click đúp chuột trái: mở Bảng điều khiển
                     show_settings_window();
                 }
                 WM_RBUTTONUP => {
-                    // Click chuột phải: hiện menu cấu hình nhanh
                     let config = GLOBAL_STATE.lock().unwrap().config.clone();
                     if let Some(tray) = TRAY_MANAGER.lock().unwrap().as_ref() {
                         tray.show_context_menu(&config);

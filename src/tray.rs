@@ -25,6 +25,10 @@ pub const IDM_AUTO_RESTORE: usize = 1005;
 pub const IDM_CONTROL_PANEL: usize = 1008;
 pub const IDM_EXIT: usize = 1009;
 
+// Nhúng trực tiếp 2 icon V và E do người dùng cung cấp
+const V_ICON_BYTES_16: &[u8] = include_bytes!("../icon/v_16.bin");
+const E_ICON_BYTES_16: &[u8] = include_bytes!("../icon/e_16.bin");
+
 pub struct TrayManager {
     hwnd: HWND,
     icon_v: HICON,
@@ -36,8 +40,8 @@ unsafe impl Sync for TrayManager {}
 
 impl TrayManager {
     pub fn new(hwnd: HWND) -> Self {
-        let icon_v = generate_tray_icon('V');
-        let icon_e = generate_tray_icon('E');
+        let icon_v = load_tray_icon(true);
+        let icon_e = load_tray_icon(false);
 
         Self {
             hwnd,
@@ -177,99 +181,19 @@ fn to_wide_chars(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Tạo icon 16x16 pixel động cho 'V' và 'E'
-fn generate_tray_icon(letter: char) -> HICON {
-    const W: usize = 16;
-    const H: usize = 16;
-
-    let mut and_mask = [0xFFu8; 32];
-    let mut xor_mask = [0u8; W * H * 4];
-
-    let bg_color = if letter == 'V' {
-        (35u8, 35u8, 220u8) // Đỏ tươi
-    } else {
-        (220u8, 120u8, 30u8) // Xanh dương
-    };
-
-    let v_pattern: [&str; 16] = [
-        "................",
-        "..############..",
-        ".##############.",
-        ".##############.",
-        ".##X........X##.",
-        ".##XX......XX##.",
-        ".##.XX....XX.##.",
-        ".##..XX..XX..##.",
-        ".##...XXXX...##.",
-        ".##....XX....##.",
-        ".##############.",
-        ".##############.",
-        ".##############.",
-        "..############..",
-        "................",
-        "................",
-    ];
-
-    let e_pattern: [&str; 16] = [
-        "................",
-        "..############..",
-        ".##############.",
-        ".##############.",
-        ".##XXXXXXXXX###.",
-        ".##X...........#.",
-        ".##XXXXXXX.....#.",
-        ".##X...........#.",
-        ".##XXXXXXXXX###.",
-        ".##############.",
-        ".##############.",
-        ".##############.",
-        "..############..",
-        "................",
-        "................",
-        "................",
-    ];
-
-    let pattern = if letter == 'V' { &v_pattern } else { &e_pattern };
-
-    for y in 0..H {
-        let row_str = pattern[y];
-        for (x, ch) in row_str.chars().enumerate() {
-            if x >= W { break; }
-            let idx = (y * W + x) * 4;
-
-            if ch == '.' {
-                let byte_idx = y * 2 + (x / 8);
-                let bit_idx = 7 - (x % 8);
-                and_mask[byte_idx] |= 1 << bit_idx;
-            } else {
-                let byte_idx = y * 2 + (x / 8);
-                let bit_idx = 7 - (x % 8);
-                and_mask[byte_idx] &= !(1 << bit_idx);
-
-                if ch == 'X' {
-                    xor_mask[idx] = 255;
-                    xor_mask[idx + 1] = 255;
-                    xor_mask[idx + 2] = 255;
-                    xor_mask[idx + 3] = 255;
-                } else {
-                    xor_mask[idx] = bg_color.0;
-                    xor_mask[idx + 1] = bg_color.1;
-                    xor_mask[idx + 2] = bg_color.2;
-                    xor_mask[idx + 3] = 255;
-                }
-            }
-        }
-    }
+fn load_tray_icon(is_v: bool) -> HICON {
+    let bytes = if is_v { V_ICON_BYTES_16 } else { E_ICON_BYTES_16 };
+    let and_mask = [0u8; 32]; // 16x16 / 8 = 32 bytes
 
     unsafe {
         CreateIcon(
             null_mut(),
-            W as i32,
-            H as i32,
+            16,
+            16,
             1,
             32,
             and_mask.as_ptr(),
-            xor_mask.as_ptr(),
+            bytes.as_ptr(),
         )
     }
 }
