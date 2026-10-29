@@ -12,8 +12,8 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetMessageW, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage, MB_OK, MSG, WM_COMMAND,
-    WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
+    PostMessageW, PostQuitMessage, RegisterClassW, SetProcessDPIAware, TranslateMessage, MB_OK,
+    MSG, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
 };
 
 use crate::config::{Config, InputMethod};
@@ -41,6 +41,23 @@ pub static GLOBAL_STATE: LazyLock<Mutex<AppState>> = LazyLock::new(|| {
 pub static TRAY_MANAGER: LazyLock<Mutex<Option<TrayManager>>> = LazyLock::new(|| Mutex::new(None));
 
 fn main() {
+    // 0. Bật DPI-Awareness toàn diện (Per-Monitor V2) để giao diện hiển thị siêu sắc nét
+    unsafe {
+        let user32 = GetModuleHandleW(to_wide("user32.dll").as_ptr());
+        if user32 != null_mut() {
+            let set_dpi_context: Option<unsafe extern "system" fn(isize) -> i32> = std::mem::transmute(
+                windows_sys::Win32::System::LibraryLoader::GetProcAddress(user32, b"SetProcessDpiAwarenessContext\0".as_ptr())
+            );
+            if let Some(set_context) = set_dpi_context {
+                set_context(-4); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            } else {
+                SetProcessDPIAware();
+            }
+        } else {
+            SetProcessDPIAware();
+        }
+    }
+
     let class_name = to_wide("HoyuKey_TrayReceiver");
 
     // 1. Kiểm tra đơn thể: Nếu HoyuKey đã chạy ngầm, gửi lệnh mở Bảng điều khiển rồi thoát

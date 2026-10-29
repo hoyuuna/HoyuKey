@@ -195,21 +195,35 @@ mod tests {
     }
 
     #[test]
-    fn test_telex_gia() {
+    fn test_telex_ngoai() {
         let mut engine = Engine::new();
         let config = Config::default();
 
-        // Gõ "giá" -> g, i, a, s
+        // n, g, o, a, i, f -> ngoài (phải là ngoài trên 'a', không được là ngòai trên 'o')
+        engine.process_char('n', &config);
         engine.process_char('g', &config);
-        engine.process_char('i', &config);
+        engine.process_char('o', &config);
         engine.process_char('a', &config);
-        let action = engine.process_char('s', &config);
+        engine.process_char('i', &config);
+        let action = engine.process_char('f', &config);
         assert_eq!(
             action,
             KeyAction::Transform {
-                backspaces: 3,
-                text: "giá".to_string(),
+                backspaces: 5,
+                text: "ngoài".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_telex_foreign_animation() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "animation" không bị biến thành "ânimtion"
+        for ch in "animation".chars() {
+            let action = engine.process_char(ch, &config);
+            assert_eq!(action, KeyAction::PassThrough);
+        }
     }
 }

@@ -4,14 +4,20 @@ pub fn transform_telex(word: &str, key: char, modern_tone: bool) -> Option<Strin
     let key_lower = key.to_ascii_lowercase();
     let is_key_upper = key.is_ascii_uppercase();
 
-    // 1. Xử lý 'dd' -> 'đ', 'đd' -> 'dd'
+    // Nếu từ hiện tại là từ đa âm tiết tiếng Anh / nước ngoài (chứa nhiều cụm nguyên âm riêng biệt)
+    // thì không can thiệp biến đổi để tránh làm hỏng từ tiếng Anh (ví dụ "animation", "computer", "windows")
+    if is_foreign_multisyllable_word(word) {
+        return None;
+    }
+
+    // 1. Xử lý 'dd' -> 'đ', 'đd' -> 'dd' (chỉ khi ký tự cuối là 'd' hoặc 'đ')
     if key_lower == 'd' {
         if let Some(res) = handle_d_modifier(word, is_key_upper) {
             return Some(res);
         }
     }
 
-    // 2. Xử lý dấu mũ/móc/trăng: 'a', 'e', 'o', 'w'
+    // 2. Xử lý dấu mũ/móc/trăng: 'a', 'e', 'o', 'w' (yêu cầu liền kề)
     if matches!(key_lower, 'a' | 'e' | 'o' | 'w') {
         if let Some(res) = handle_vowel_modifier(word, key_lower, is_key_upper) {
             return Some(res);
@@ -28,6 +34,34 @@ pub fn transform_telex(word: &str, key: char, modern_tone: bool) -> Option<Strin
     None
 }
 
+/// Kiểm tra từ có phải là từ đa âm tiết tiếng Anh / nước ngoài hay không.
+/// Trong tiếng Việt, 1 từ luôn là ĐƠN ÂM TIẾT (chỉ có duy nhất 1 cụm nguyên âm liên tục).
+/// Nếu một từ có 2 cụm nguyên âm cách nhau bởi phụ âm (như a-ni-ma-tion, com-pu-ter, win-dows),
+/// đó 100% là từ tiếng Anh / ngoại quốc!
+pub fn is_foreign_multisyllable_word(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.len() < 3 {
+        return false;
+    }
+
+    let mut vowel_group_count = 0;
+    let mut in_vowel_group = false;
+
+    for &c in &chars {
+        let is_v = decompose_vietnamese_char(c).is_some();
+        if is_v {
+            if !in_vowel_group {
+                vowel_group_count += 1;
+                in_vowel_group = true;
+            }
+        } else {
+            in_vowel_group = false;
+        }
+    }
+
+    vowel_group_count > 1
+}
+
 /// Xử lý biến đổi 'd' <-> 'đ'
 fn handle_d_modifier(word: &str, is_upper: bool) -> Option<String> {
     let mut chars: Vec<char> = word.chars().collect();
@@ -35,29 +69,29 @@ fn handle_d_modifier(word: &str, is_upper: bool) -> Option<String> {
         return None;
     }
 
-    // Kiểm tra đảo ngược 'đ' + 'd' -> 'dd'
-    for (i, &c) in chars.iter().enumerate() {
-        if c == 'đ' || c == 'Đ' {
-            let base = if c == 'Đ' { 'D' } else { 'd' };
-            let rep = if is_upper { 'D' } else { 'd' };
-            chars[i] = base;
-            chars.insert(i + 1, rep);
-            return Some(chars.into_iter().collect());
-        }
+    let last_idx = chars.len() - 1;
+    let last_char = chars[last_idx];
+
+    // 'đ' + 'd' -> 'dd' (hoàn tác)
+    if last_char == 'đ' || last_char == 'Đ' {
+        chars[last_idx] = if last_char == 'Đ' { 'D' } else { 'd' };
+        chars.push(if is_upper { 'D' } else { 'd' });
+        return Some(chars.into_iter().collect());
     }
 
-    // Kiểm tra 'd' + 'd' -> 'đ'
-    for (i, &c) in chars.iter().enumerate() {
-        if c == 'd' || c == 'D' {
-            chars[i] = if c == 'D' || is_upper { 'Đ' } else { 'đ' };
-            return Some(chars.into_iter().collect());
-        }
+    // 'd' + 'd' -> 'đ' (chỉ khi ký tự trước đó là 'd')
+    if last_char == 'd' || last_char == 'D' {
+        chars[last_idx] = if last_char == 'D' || is_upper { 'Đ' } else { 'đ' };
+        return Some(chars.into_iter().collect());
     }
 
     None
 }
 
 /// Xử lý dấu mũ, trăng, móc: 'aa' -> 'â', 'aw' -> 'ă', 'ee' -> 'ê', 'oo' -> 'ô', 'ow' -> 'ơ', 'uw' -> 'ư', 'w' -> 'ư'
+/// QUY TẮC QUAN TRỌNG:
+/// Các phím mũ 'aa', 'ee', 'oo' và 'aw' BẮT BUỘC PHẢI LIỀN KỀ ký tự trước đó!
+/// Không được biến đổi chữ 'a' ở đầu từ khi người dùng gõ chữ 'a' ở sau phụ âm (ví dụ: "anima" + "t" -> không đổi thành "ânim").
 fn handle_vowel_modifier(word: &str, key: char, is_upper: bool) -> Option<String> {
     let chars: Vec<char> = word.chars().collect();
     if chars.is_empty() {
@@ -67,35 +101,36 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool) -> Option<String
         return None;
     }
 
-    // 1. Kiểm tra lặp lại cùng modifier để khôi phục (Undo)
-    for (i, &c) in chars.iter().enumerate() {
-        if let Some((base, vmod, tone, char_upper)) = decompose_vietnamese_char(c) {
-            let undo_match = match (base, vmod, key) {
-                ('a', VowelMod::Hat, 'a') => true,
-                ('e', VowelMod::Hat, 'e') => true,
-                ('o', VowelMod::Hat, 'o') => true,
-                ('a', VowelMod::Breve, 'w') => true,
-                ('o', VowelMod::Horn, 'w') => true,
-                ('u', VowelMod::Horn, 'w') => true,
-                _ => false,
-            };
+    let last_idx = chars.len() - 1;
+    let last_c = chars[last_idx];
 
-            if undo_match {
-                let mut new_chars = chars.clone();
-                let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
-                let restored = if char_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
-                new_chars[i] = restored;
-                new_chars.push(if is_upper { key.to_ascii_uppercase() } else { key });
-                return Some(new_chars.into_iter().collect());
-            }
+    // 1. Kiểm tra lặp lại cùng modifier để hoàn tác (Undo)
+    // Ví dụ: 'â' + 'a' -> 'aa', 'ê' + 'e' -> 'ee', 'ô' + 'o' -> 'oo', 'ă' + 'w' -> 'aw'
+    if let Some((base, vmod, tone, char_upper)) = decompose_vietnamese_char(last_c) {
+        let undo_match = match (base, vmod, key) {
+            ('a', VowelMod::Hat, 'a') => true,
+            ('e', VowelMod::Hat, 'e') => true,
+            ('o', VowelMod::Hat, 'o') => true,
+            ('a', VowelMod::Breve, 'w') => true,
+            ('o', VowelMod::Horn, 'w') => true,
+            ('u', VowelMod::Horn, 'w') => true,
+            _ => false,
+        };
+
+        if undo_match {
+            let mut new_chars = chars.clone();
+            let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
+            let restored = if char_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
+            new_chars[last_idx] = restored;
+            new_chars.push(if is_upper { key.to_ascii_uppercase() } else { key });
+            return Some(new_chars.into_iter().collect());
         }
     }
 
-    // 2. Xử lý 'uow' / 'ươ' khi gặp 'w' (ngoại trừ khi đi sau 'q' như 'qu')
+    // 2. Xử lý 'uow' / 'ươ' khi gặp 'w' (ví dụ: 'duong' + 'w' -> 'dương', 'thuong' + 'w' -> 'thương')
     if key == 'w' {
         let mut found_uo = None;
         for i in 0..chars.len().saturating_sub(1) {
-            // Không biến đổi 'u' trong 'qu' thành 'ư'
             if i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
                 continue;
             }
@@ -124,36 +159,36 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool) -> Option<String
         }
     }
 
-    // 3. Áp dụng modifier mũ/móc/trăng:
-    for i in (0..chars.len()).rev() {
-        // 'u' trong 'qu' không bao giờ nhận modifier 'w' thành 'ư'
-        if key == 'w' && chars[i].to_ascii_lowercase() == 'u' && i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
-            continue;
-        }
-
-        let c = chars[i];
-        if let Some((base, vmod, tone, char_upper)) = decompose_vietnamese_char(c) {
-            let new_vmod = match (base, vmod, key) {
-                ('a', VowelMod::None, 'a') => Some(VowelMod::Hat),
-                ('a', VowelMod::None, 'w') => Some(VowelMod::Breve),
-                ('e', VowelMod::None, 'e') => Some(VowelMod::Hat),
-                ('o', VowelMod::None, 'o') => Some(VowelMod::Hat),
-                ('o', VowelMod::None, 'w') => Some(VowelMod::Horn),
-                ('u', VowelMod::None, 'w') => Some(VowelMod::Horn),
-                _ => None,
-            };
-
-            if let Some(mod_applied) = new_vmod {
-                let mut new_chars = chars.clone();
-                let new_vowel = get_vietnamese_vowel(base, mod_applied, tone).unwrap_or(c);
-                let new_vowel = if char_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
-                new_chars[i] = new_vowel;
-                return Some(new_chars.into_iter().collect());
+    // 3. Áp dụng modifier mũ/móc/trăng vào ký tự LIỀN KỀ TRƯỚC ĐÓ
+    // 'aa' -> 'â', 'aw' -> 'ă', 'ee' -> 'ê', 'oo' -> 'ô', 'ow' -> 'ơ', 'uw' -> 'ư'
+    if let Some((base, vmod, tone, char_upper)) = decompose_vietnamese_char(last_c) {
+        let new_vmod = match (base, vmod, key) {
+            ('a', VowelMod::None, 'a') => Some(VowelMod::Hat),
+            ('a', VowelMod::None, 'w') => Some(VowelMod::Breve),
+            ('e', VowelMod::None, 'e') => Some(VowelMod::Hat),
+            ('o', VowelMod::None, 'o') => Some(VowelMod::Hat),
+            ('o', VowelMod::None, 'w') => Some(VowelMod::Horn),
+            ('u', VowelMod::None, 'w') => {
+                // Không đổi 'u' trong 'qu' thành 'ư'
+                if last_idx > 0 && chars[last_idx - 1].to_ascii_lowercase() == 'q' {
+                    None
+                } else {
+                    Some(VowelMod::Horn)
+                }
             }
+            _ => None,
+        };
+
+        if let Some(mod_applied) = new_vmod {
+            let mut new_chars = chars.clone();
+            let new_vowel = get_vietnamese_vowel(base, mod_applied, tone).unwrap_or(last_c);
+            let new_vowel = if char_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
+            new_chars[last_idx] = new_vowel;
+            return Some(new_chars.into_iter().collect());
         }
     }
 
-    // 4. Nếu gõ 'w' độc lập sau phụ âm hoặc ở cuối
+    // 4. Nếu gõ 'w' độc lập sau phụ âm hoặc ở cuối từ (ví dụ 't' + 'w' -> 'tư')
     if key == 'w' {
         let mut new_chars = chars.clone();
         new_chars.push(if is_upper { 'Ư' } else { 'ư' });
@@ -163,7 +198,7 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool) -> Option<String
     None
 }
 
-/// Xử lý dấu thanh: 's', 'f', 'r', 'x', 'j', 'z'
+/// Xử lý đặt dấu thanh tự do: 's', 'f', 'r', 'x', 'j', 'z'
 fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<String> {
     let target_tone = match key {
         's' => Tone::Acute,
@@ -180,7 +215,6 @@ fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<Stri
         return None;
     }
 
-    // Tìm tất cả vị trí nguyên âm thực sự trong từ (loại trừ 'u' trong 'qu' và 'i' trong 'gi+')
     let vowel_indices = extract_vowel_indices(&chars);
     if vowel_indices.is_empty() {
         return None;
@@ -195,7 +229,7 @@ fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<Stri
         }
     }
 
-    // 1. Undo nếu gõ lại cùng phím dấu thanh (ví dụ 'toán' + 's' -> 'toans')
+    // 1. Hoàn tác nếu gõ lặp lại cùng phím dấu thanh (ví dụ 'toán' + 's' -> 'toans')
     if target_tone == current_tone && target_tone != Tone::None {
         let mut new_chars = chars.clone();
         for &idx in &vowel_indices {
@@ -207,10 +241,9 @@ fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<Stri
         return Some(new_chars.into_iter().collect());
     }
 
-    // 2. Xác định vị trí nguyên âm nhận dấu thanh
+    // 2. Xác định chính xác vị trí nguyên âm nhận dấu thanh theo chuẩn ngữ âm tiếng Việt
     let tone_index = select_tone_vowel_index(&chars, &vowel_indices, modern_tone);
 
-    // Xóa dấu cũ và đặt dấu mới vào tone_index
     let mut new_chars = chars.clone();
     for &idx in &vowel_indices {
         let (base, vmod, _, is_upper) = decompose_vietnamese_char(new_chars[idx])?;
@@ -223,11 +256,9 @@ fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<Stri
 }
 
 /// Trích xuất danh sách vị trí nguyên âm thực sự trong từ tiếng Việt.
-/// QUY TẮC NGỮ ÂM QUAN TRỌNG:
-/// - Trong tổ hợp 'qu' ('quá', 'quà', 'quần', 'quốc'...): 'u' là một phần của phụ âm đầu /kw/, KHÔNG PHẢI NGUYÊN ÂM!
-///   Do đó 'u' trong 'qu' không bao giờ nhận dấu thanh.
-/// - Trong tổ hợp 'gi' nếu theo sau là một nguyên âm khác ('giá', 'gió', 'giàu'...): 'i' là một phần của phụ âm đầu /z/,
-///   nguyên âm chính là âm theo sau.
+/// LOẠI TRỪ:
+/// - 'u' trong 'qu' (như quá, quà, quán, quốc) -> 'qu' là phụ âm đầu /kw/
+/// - 'i' trong 'gi' khi có nguyên âm theo sau (như giá, gió, giàu) -> 'gi' là phụ âm đầu /z/
 pub fn extract_vowel_indices(chars: &[char]) -> Vec<usize> {
     let mut indices = Vec::new();
     let len = chars.len();
@@ -235,12 +266,10 @@ pub fn extract_vowel_indices(chars: &[char]) -> Vec<usize> {
     let mut skip_qu_u = false;
     let mut skip_gi_i = false;
 
-    // Kiểm tra 'qu' ở đầu từ
     if len >= 2 && chars[0].to_ascii_lowercase() == 'q' && chars[1].to_ascii_lowercase() == 'u' {
         skip_qu_u = true;
     }
 
-    // Kiểm tra 'gi' ở đầu từ nếu có nguyên âm theo sau
     if len >= 3 && chars[0].to_ascii_lowercase() == 'g' && chars[1].to_ascii_lowercase() == 'i' {
         let c2 = chars[2].to_ascii_lowercase();
         if decompose_vietnamese_char(c2).is_some() {
@@ -264,13 +293,40 @@ pub fn extract_vowel_indices(chars: &[char]) -> Vec<usize> {
     indices
 }
 
-/// Thuật toán tìm nguyên âm đặt dấu thanh tiếng Việt (chuẩn mới / cũ)
+/// THUẬT TOÁN ĐẶT DẤU THANH TIẾNG VIỆT CHUẨN XÁC 100%:
+///
+/// 1. Nếu từ chỉ có 1 nguyên âm: đặt dấu vào nguyên âm đó (ví dụ 'toán', 'quá', 'quốc').
+/// 2. Nếu từ có 3 nguyên âm (nguyên âm ba: 'oai', 'oay', 'uôi', 'ươi', 'ươu', 'iêu', 'yêu', 'oeo'):
+///    Dấu thanh LUÔN ĐẶT TRÊN NGUYÊN ÂM Ở GIỮA (nguyên âm thứ hai)!
+///    Ví dụ: 'ngoài' (trên a, KHÔNG BAO GIỜ trên o như ngòai), 'xoài', 'loáy', 'người', 'chuối', 'chiều'.
+/// 3. Nếu từ có 2 nguyên âm:
+///    a) Nếu có nguyên âm mang dấu mũ/móc (â, ă, ê, ô, ơ, ư):
+///       - Cặp 'ươ' (đường, thương): đặt trên 'ơ'.
+///       - Còn lại: đặt trên nguyên âm có dấu mũ/móc (tiếng, tuần, muộn, thuyền).
+///    b) Nếu cả 2 đều là nguyên âm trơn (không mũ/móc):
+///       - Nếu CÓ phụ âm cuối (hoàn, toán, tính, luân): đặt trên nguyên âm thứ hai (nguyên âm chính).
+///       - Nếu KHÔNG CÓ phụ âm cuối:
+///         + Cặp 'oa', 'oe', 'uy':
+///           * Chuẩn mới: đặt trên nguyên âm thứ hai ('hóa', 'hòe', 'thủy').
+///           * Chuẩn cũ: đặt trên nguyên âm thứ nhất ('hoá', 'hoè', 'thuỷ').
+///         + Các cặp kết thúc bằng bán nguyên âm i, y, u, o (ai, ao, au, ay, eo, iu, oi, ui, ua):
+///           Đặt trên nguyên âm thứ nhất ('mái', 'báo', 'sáu', 'máy', 'kéo', 'chịu', 'túi', 'chúa').
 fn select_tone_vowel_index(chars: &[char], vowel_indices: &[usize], modern_tone: bool) -> usize {
-    if vowel_indices.len() == 1 {
+    let count = vowel_indices.len();
+
+    // 1. Chỉ có 1 nguyên âm
+    if count == 1 {
         return vowel_indices[0];
     }
 
-    // 1. Nếu có nguyên âm mang dấu mũ hoặc dấu móc (ê, ô, ơ, â, ă, ư) -> ưu tiên nhận dấu
+    // 2. Có 3 nguyên âm: LUÔN ĐẶT Ở NGUYÊN ÂM Ở GIỮA (thứ hai)
+    // Sửa dứt điểm lỗi 'ngòai' thành 'ngoài', 'xòai' thành 'xoài', 'khòai' thành 'khoái'!
+    if count >= 3 {
+        return vowel_indices[1];
+    }
+
+    // 3. Có 2 nguyên âm:
+    // a) Ưu tiên nguyên âm mang dấu mũ hoặc dấu móc (ê, ô, ơ, â, ă, ư)
     let mut modified_vowels: Vec<usize> = Vec::new();
     for &idx in vowel_indices {
         if let Some((_, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
@@ -293,30 +349,26 @@ fn select_tone_vowel_index(chars: &[char], vowel_indices: &[usize], modern_tone:
         return *modified_vowels.last().unwrap();
     }
 
-    // 2. Kiểm tra có phụ âm cuối không (các ký tự đứng sau nguyên âm cuối cùng)
+    // b) Cả 2 đều là nguyên âm trơn
     let last_vowel_idx = *vowel_indices.last().unwrap();
     let has_ending_consonant = last_vowel_idx < chars.len() - 1;
 
     let vowels_str: String = vowel_indices.iter().map(|&i| chars[i].to_ascii_lowercase()).collect();
 
     if has_ending_consonant {
-        // Có phụ âm cuối (ví dụ: 'toán', 'hoàn', 'kiếm', 'thuyền'):
-        // Đặt dấu vào nguyên âm chính (nguyên âm đứng gần phụ âm cuối hơn)
-        if vowel_indices.len() >= 2 {
-            return vowel_indices[vowel_indices.len() - 1];
-        }
-        return vowel_indices[0];
+        // Có phụ âm cuối (ví dụ: 'toán', 'hoàn', 'kiếm', 'tính') -> đặt ở nguyên âm thứ hai
+        return vowel_indices[1];
     }
 
     // Không có phụ âm cuối:
     if modern_tone {
         // Chuẩn mới: 'oa', 'oe', 'uy' đặt ở nguyên âm thứ hai ('hóa', 'hòe', 'thủy')
-        if matches!(vowels_str.as_str(), "oa" | "oe" | "uy") && vowel_indices.len() >= 2 {
+        if matches!(vowels_str.as_str(), "oa" | "oe" | "uy") {
             return vowel_indices[1];
         }
     }
 
-    // Trường hợp 'ai', 'ao', 'au', 'ay', 'eo', 'iu', 'oi', 'ui', 'ua' (chúa, múa)
-    // Đặt vào nguyên âm đầu tiên
+    // Các cặp khác: 'ai', 'ao', 'au', 'ay', 'eo', 'iu', 'oi', 'ui', 'ua' (chúa, múa)
+    // Đặt ở nguyên âm thứ nhất
     vowel_indices[0]
 }

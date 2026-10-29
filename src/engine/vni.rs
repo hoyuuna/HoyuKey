@@ -6,6 +6,10 @@ pub fn transform_vni(word: &str, key: char, modern_tone: bool) -> Option<String>
         return None;
     }
 
+    if super::telex::is_foreign_multisyllable_word(word) {
+        return None;
+    }
+
     match key {
         '1'..='5' | '0' => handle_vni_tone(word, key, modern_tone),
         '6' => handle_vni_hat(word),
@@ -23,21 +27,20 @@ fn handle_vni_d(word: &str) -> Option<String> {
         return None;
     }
 
-    // Đảo ngược 'đ' + '9' -> 'd9'
-    for (i, &c) in chars.iter().enumerate() {
-        if c == 'đ' || c == 'Đ' {
-            chars[i] = if c == 'Đ' { 'D' } else { 'd' };
-            chars.insert(i + 1, '9');
-            return Some(chars.into_iter().collect());
-        }
+    let last_idx = chars.len() - 1;
+    let last_char = chars[last_idx];
+
+    // 'đ' + '9' -> 'd9'
+    if last_char == 'đ' || last_char == 'Đ' {
+        chars[last_idx] = if last_char == 'Đ' { 'D' } else { 'd' };
+        chars.push('9');
+        return Some(chars.into_iter().collect());
     }
 
     // 'd' + '9' -> 'đ'
-    for (i, &c) in chars.iter().enumerate() {
-        if c == 'd' || c == 'D' {
-            chars[i] = if c == 'D' { 'Đ' } else { 'đ' };
-            return Some(chars.into_iter().collect());
-        }
+    if last_char == 'd' || last_char == 'D' {
+        chars[last_idx] = if last_char == 'D' { 'Đ' } else { 'đ' };
+        return Some(chars.into_iter().collect());
     }
 
     None
@@ -50,29 +53,27 @@ fn handle_vni_hat(word: &str) -> Option<String> {
         return None;
     }
 
-    // Kiểm tra Undo nếu đã có dấu mũ
-    for (i, &c) in chars.iter().enumerate() {
-        if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(c) {
-            if vmod == VowelMod::Hat && matches!(base, 'a' | 'e' | 'o') {
-                let mut new_chars = chars.clone();
-                let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
-                new_chars[i] = if is_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
-                new_chars.push('6');
-                return Some(new_chars.into_iter().collect());
-            }
+    let last_idx = chars.len() - 1;
+    let last_c = chars[last_idx];
+
+    // Undo nếu đã có dấu mũ
+    if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(last_c) {
+        if vmod == VowelMod::Hat && matches!(base, 'a' | 'e' | 'o') {
+            let mut new_chars = chars.clone();
+            let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
+            new_chars[last_idx] = if is_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
+            new_chars.push('6');
+            return Some(new_chars.into_iter().collect());
         }
     }
 
-    // Áp dụng dấu mũ vào nguyên âm thích hợp
-    for i in (0..chars.len()).rev() {
-        let c = chars[i];
-        if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(c) {
-            if vmod == VowelMod::None && matches!(base, 'a' | 'e' | 'o') {
-                let mut new_chars = chars.clone();
-                let new_vowel = get_vietnamese_vowel(base, VowelMod::Hat, tone).unwrap_or(c);
-                new_chars[i] = if is_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
-                return Some(new_chars.into_iter().collect());
-            }
+    // Áp dụng dấu mũ vào nguyên âm liền kề
+    if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(last_c) {
+        if vmod == VowelMod::None && matches!(base, 'a' | 'e' | 'o') {
+            let mut new_chars = chars.clone();
+            let new_vowel = get_vietnamese_vowel(base, VowelMod::Hat, tone).unwrap_or(last_c);
+            new_chars[last_idx] = if is_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
+            return Some(new_chars.into_iter().collect());
         }
     }
 
@@ -86,7 +87,7 @@ fn handle_vni_horn(word: &str) -> Option<String> {
         return None;
     }
 
-    // 1. Kiểm tra cặp 'uo' -> 'ươ' (trừ 'qu')
+    // 1. Kiểm tra cặp 'uo' -> 'ươ'
     let mut found_uo = None;
     for i in 0..chars.len().saturating_sub(1) {
         if i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
@@ -116,33 +117,31 @@ fn handle_vni_horn(word: &str) -> Option<String> {
         return Some(new_chars.into_iter().collect());
     }
 
-    // 2. Kiểm tra Undo cho 'ơ' hoặc 'ư'
-    for (i, &c) in chars.iter().enumerate() {
-        if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(c) {
-            if vmod == VowelMod::Horn && matches!(base, 'o' | 'u') {
-                let mut new_chars = chars.clone();
-                let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
-                new_chars[i] = if is_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
-                new_chars.push('7');
-                return Some(new_chars.into_iter().collect());
-            }
+    let last_idx = chars.len() - 1;
+    let last_c = chars[last_idx];
+
+    // Undo cho 'ơ' hoặc 'ư'
+    if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(last_c) {
+        if vmod == VowelMod::Horn && matches!(base, 'o' | 'u') {
+            let mut new_chars = chars.clone();
+            let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
+            new_chars[last_idx] = if is_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
+            new_chars.push('7');
+            return Some(new_chars.into_iter().collect());
         }
     }
 
-    // 3. Áp dụng dấu móc cho 'o' hoặc 'u' (trừ 'qu')
-    for i in (0..chars.len()).rev() {
-        if chars[i].to_ascii_lowercase() == 'u' && i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
-            continue;
-        }
+    // Áp dụng dấu móc cho 'o' hoặc 'u'
+    if last_idx > 0 && chars[last_idx - 1].to_ascii_lowercase() == 'q' && last_c.to_ascii_lowercase() == 'u' {
+        return None;
+    }
 
-        let c = chars[i];
-        if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(c) {
-            if vmod == VowelMod::None && matches!(base, 'o' | 'u') {
-                let mut new_chars = chars.clone();
-                let new_vowel = get_vietnamese_vowel(base, VowelMod::Horn, tone).unwrap_or(c);
-                new_chars[i] = if is_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
-                return Some(new_chars.into_iter().collect());
-            }
+    if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(last_c) {
+        if vmod == VowelMod::None && matches!(base, 'o' | 'u') {
+            let mut new_chars = chars.clone();
+            let new_vowel = get_vietnamese_vowel(base, VowelMod::Horn, tone).unwrap_or(last_c);
+            new_chars[last_idx] = if is_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
+            return Some(new_chars.into_iter().collect());
         }
     }
 
@@ -156,29 +155,27 @@ fn handle_vni_breve(word: &str) -> Option<String> {
         return None;
     }
 
+    let last_idx = chars.len() - 1;
+    let last_c = chars[last_idx];
+
     // Undo nếu đã có 'ă'
-    for (i, &c) in chars.iter().enumerate() {
-        if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(c) {
-            if vmod == VowelMod::Breve && base == 'a' {
-                let mut new_chars = chars.clone();
-                let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
-                new_chars[i] = if is_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
-                new_chars.push('8');
-                return Some(new_chars.into_iter().collect());
-            }
+    if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(last_c) {
+        if vmod == VowelMod::Breve && base == 'a' {
+            let mut new_chars = chars.clone();
+            let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
+            new_chars[last_idx] = if is_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
+            new_chars.push('8');
+            return Some(new_chars.into_iter().collect());
         }
     }
 
     // Áp dụng 'a' -> 'ă'
-    for i in (0..chars.len()).rev() {
-        let c = chars[i];
-        if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(c) {
-            if vmod == VowelMod::None && base == 'a' {
-                let mut new_chars = chars.clone();
-                let new_vowel = get_vietnamese_vowel(base, VowelMod::Breve, tone).unwrap_or(c);
-                new_chars[i] = if is_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
-                return Some(new_chars.into_iter().collect());
-            }
+    if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(last_c) {
+        if vmod == VowelMod::None && base == 'a' {
+            let mut new_chars = chars.clone();
+            let new_vowel = get_vietnamese_vowel(base, VowelMod::Breve, tone).unwrap_or(last_c);
+            new_chars[last_idx] = if is_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
+            return Some(new_chars.into_iter().collect());
         }
     }
 
@@ -186,7 +183,7 @@ fn handle_vni_breve(word: &str) -> Option<String> {
 }
 
 /// VNI 1-5, 0: Dấu thanh
-fn handle_vni_tone(word: &str, key: char, _modern_tone: bool) -> Option<String> {
+fn handle_vni_tone(word: &str, key: char, modern_tone: bool) -> Option<String> {
     let target_tone = match key {
         '1' => Tone::Acute,
         '2' => Tone::Grave,
@@ -224,9 +221,11 @@ fn handle_vni_tone(word: &str, key: char, _modern_tone: bool) -> Option<String> 
         return Some(new_chars.into_iter().collect());
     }
 
-    // Chọn vị trí nguyên âm nhận dấu
-    let target_idx = if vowel_indices.len() == 1 {
+    let count = vowel_indices.len();
+    let target_idx = if count == 1 {
         vowel_indices[0]
+    } else if count >= 3 {
+        vowel_indices[1] // Triphthong: luôn ở giữa (ví dụ ngoài, xoài)
     } else {
         let mut modified = None;
         for &idx in &vowel_indices {
@@ -239,7 +238,20 @@ fn handle_vni_tone(word: &str, key: char, _modern_tone: bool) -> Option<String> 
         if let Some(m) = modified {
             m
         } else {
-            vowel_indices[vowel_indices.len().saturating_sub(1)]
+            let last_idx = *vowel_indices.last().unwrap();
+            let has_ending = last_idx < chars.len() - 1;
+            if has_ending {
+                vowel_indices[1]
+            } else if modern_tone {
+                let s: String = vowel_indices.iter().map(|&i| chars[i].to_ascii_lowercase()).collect();
+                if matches!(s.as_str(), "oa" | "oe" | "uy") {
+                    vowel_indices[1]
+                } else {
+                    vowel_indices[0]
+                }
+            } else {
+                vowel_indices[0]
+            }
         }
     };
 
