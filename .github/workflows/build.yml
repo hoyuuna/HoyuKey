@@ -36,20 +36,17 @@ jobs:
       - name: Build Release Binary
         run: cargo build --release
 
-      - name: Package Release
+      - name: Prepare Binary
         shell: powershell
         run: |
-          $ver = "0.1.${{ github.run_number }}"
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item target/release/hoyukey.exe dist/HoyuKey.exe
-          Copy-Item README.md dist/README.md
-          Compress-Archive -Path dist/* -DestinationPath "dist/HoyuKey-v$ver-win64.zip"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: HoyuKey-v0.1.${{ github.run_number }}-Windows-x64
-          path: dist/*
+          path: dist/HoyuKey.exe
           retention-days: 30
 
       - name: Publish GitHub Pre-Release
@@ -67,11 +64,9 @@ jobs:
             - **Commit**: `${{ github.sha }}`
             - **Build**: #${{ github.run_number }}
 
-            #### 📦 Tệp tải về:
-            - **`HoyuKey.exe`**: Tải về và chạy trực tiếp trên Windows (không cần cài đặt).
-            - **`HoyuKey-v0.1.${{ github.run_number }}-win64.zip`**: File nén chứa `.exe` kèm tài liệu hướng dẫn.
+            #### 📦 Tải về:
+            - **`HoyuKey.exe`**: Tải về và nhấp đúp để chạy trực tiếp trên Windows (không cần cài đặt).
           prerelease: true
           draft: false
           files: |
             dist/HoyuKey.exe
-            dist/HoyuKey-v0.1.${{ github.run_number }}-win64.zip

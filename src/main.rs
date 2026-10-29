@@ -12,16 +12,15 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetMessageW, MessageBoxW,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, TranslateMessage, MB_ICONINFORMATION,
-    MB_OK, MSG, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
-    WNDCLASSW,
+    PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage, MB_OK, MSG, WM_COMMAND,
+    WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
 };
 
 use crate::config::{Config, InputMethod};
 use crate::engine::Engine;
 use crate::tray::{
     TrayManager, IDM_AUTO_RESTORE, IDM_CONTROL_PANEL, IDM_EXIT, IDM_MODERN_TONE, IDM_TELEX,
-    IDM_TOGGLE_MODE, IDM_VNI, WM_APP_TRAY, WM_APP_UPDATE_TRAY,
+    IDM_TOGGLE_MODE, IDM_VNI, WM_APP_SHOW_SETTINGS, WM_APP_TRAY, WM_APP_UPDATE_TRAY,
 };
 use crate::ui::{create_settings_window, show_settings_window};
 
@@ -44,17 +43,11 @@ pub static TRAY_MANAGER: LazyLock<Mutex<Option<TrayManager>>> = LazyLock::new(||
 fn main() {
     let class_name = to_wide("HoyuKey_TrayReceiver");
 
-    // 1. Kiểm tra đơn thể (Single Instance Check)
+    // 1. Kiểm tra đơn thể: Nếu HoyuKey đã chạy ngầm, gửi lệnh mở Bảng điều khiển rồi thoát
     let existing_wnd = unsafe { FindWindowW(class_name.as_ptr(), null_mut()) };
     if existing_wnd != null_mut() {
         unsafe {
-            SetForegroundWindow(existing_wnd);
-            MessageBoxW(
-                null_mut(),
-                to_wide("HoyuKey đang chạy trên hệ thống (kiểm tra khay Taskbar góc phải)!").as_ptr(),
-                to_wide("HoyuKey - Thông báo").as_ptr(),
-                MB_ICONINFORMATION | MB_OK,
-            );
+            PostMessageW(existing_wnd, WM_APP_SHOW_SETTINGS, 0, 0);
         }
         return;
     }
@@ -149,6 +142,10 @@ unsafe extern "system" fn tray_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_APP_SHOW_SETTINGS => {
+            show_settings_window();
+            0
+        }
         WM_APP_TRAY => {
             let event = lparam as u32;
             match event {

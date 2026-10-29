@@ -159,23 +159,55 @@ mod tests {
     }
 
     #[test]
-    fn test_telex_duong() {
+    fn test_telex_qua_quoc() {
         let mut engine = Engine::new();
         let config = Config::default();
 
-        // d, d -> đ, u, o, n, g, w -> đương
-        engine.process_char('d', &config);
-        engine.process_char('d', &config);
+        // Gõ "quá" -> q, u, a, s
+        engine.process_char('q', &config);
+        engine.process_char('u', &config);
+        engine.process_char('a', &config);
+        let action = engine.process_char('s', &config);
+        assert_eq!(
+            action,
+            KeyAction::Transform {
+                backspaces: 3,
+                text: "quá".to_string(),
+            }
+        );
+
+        engine.reset();
+        // Gõ "quốc" -> q, u, o, o, c, s
+        engine.process_char('q', &config);
         engine.process_char('u', &config);
         engine.process_char('o', &config);
-        engine.process_char('n', &config);
-        engine.process_char('g', &config);
-        let action = engine.process_char('w', &config);
+        engine.process_char('o', &config);
+        engine.process_char('c', &config);
+        let action = engine.process_char('s', &config);
         assert_eq!(
             action,
             KeyAction::Transform {
                 backspaces: 5,
-                text: "đương".to_string(),
+                text: "quốc".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_telex_gia() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "giá" -> g, i, a, s
+        engine.process_char('g', &config);
+        engine.process_char('i', &config);
+        engine.process_char('a', &config);
+        let action = engine.process_char('s', &config);
+        assert_eq!(
+            action,
+            KeyAction::Transform {
+                backspaces: 3,
+                text: "giá".to_string(),
             }
         );
     }

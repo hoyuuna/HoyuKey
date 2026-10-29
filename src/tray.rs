@@ -14,6 +14,7 @@ use crate::config::{Config, InputMethod};
 
 pub const WM_APP_TRAY: u32 = 0x8000 + 1; // WM_USER + 1
 pub const WM_APP_UPDATE_TRAY: u32 = 0x8000 + 2;
+pub const WM_APP_SHOW_SETTINGS: u32 = 0x8000 + 3;
 
 // Command IDs
 pub const IDM_TOGGLE_MODE: usize = 1001;

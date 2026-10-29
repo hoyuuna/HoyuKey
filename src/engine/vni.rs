@@ -1,3 +1,4 @@
+use super::telex::extract_vowel_indices;
 use super::vietnamese::{decompose_vietnamese_char, get_vietnamese_vowel, Tone, VowelMod};
 
 pub fn transform_vni(word: &str, key: char, modern_tone: bool) -> Option<String> {
@@ -85,9 +86,12 @@ fn handle_vni_horn(word: &str) -> Option<String> {
         return None;
     }
 
-    // 1. Kiểm tra cặp 'uo' -> 'ươ'
+    // 1. Kiểm tra cặp 'uo' -> 'ươ' (trừ 'qu')
     let mut found_uo = None;
     for i in 0..chars.len().saturating_sub(1) {
+        if i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
+            continue;
+        }
         let c1 = chars[i].to_ascii_lowercase();
         let c2 = chars[i + 1].to_ascii_lowercase();
         if (c1 == 'u' || c1 == 'ư') && (c2 == 'o' || c2 == 'ơ') {
@@ -125,8 +129,12 @@ fn handle_vni_horn(word: &str) -> Option<String> {
         }
     }
 
-    // 3. Áp dụng dấu móc cho 'o' hoặc 'u'
+    // 3. Áp dụng dấu móc cho 'o' hoặc 'u' (trừ 'qu')
     for i in (0..chars.len()).rev() {
+        if chars[i].to_ascii_lowercase() == 'u' && i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
+            continue;
+        }
+
         let c = chars[i];
         if let Some((base, vmod, tone, is_upper)) = decompose_vietnamese_char(c) {
             if vmod == VowelMod::None && matches!(base, 'o' | 'u') {
@@ -178,7 +186,7 @@ fn handle_vni_breve(word: &str) -> Option<String> {
 }
 
 /// VNI 1-5, 0: Dấu thanh
-fn handle_vni_tone(word: &str, key: char, modern_tone: bool) -> Option<String> {
+fn handle_vni_tone(word: &str, key: char, _modern_tone: bool) -> Option<String> {
     let target_tone = match key {
         '1' => Tone::Acute,
         '2' => Tone::Grave,
@@ -190,20 +198,18 @@ fn handle_vni_tone(word: &str, key: char, modern_tone: bool) -> Option<String> {
     };
 
     let chars: Vec<char> = word.chars().collect();
-    let mut vowel_indices: Vec<usize> = Vec::new();
-    let mut current_tone = Tone::None;
+    let vowel_indices = extract_vowel_indices(&chars);
+    if vowel_indices.is_empty() {
+        return None;
+    }
 
-    for (i, &c) in chars.iter().enumerate() {
-        if let Some((_, _, tone, _)) = decompose_vietnamese_char(c) {
-            vowel_indices.push(i);
+    let mut current_tone = Tone::None;
+    for &idx in &vowel_indices {
+        if let Some((_, _, tone, _)) = decompose_vietnamese_char(chars[idx]) {
             if tone != Tone::None {
                 current_tone = tone;
             }
         }
-    }
-
-    if vowel_indices.is_empty() {
-        return None;
     }
 
     // Undo nếu gõ lại cùng phím số dấu
@@ -219,13 +225,9 @@ fn handle_vni_tone(word: &str, key: char, modern_tone: bool) -> Option<String> {
     }
 
     // Chọn vị trí nguyên âm nhận dấu
-    let tone_index = super::telex::transform_telex("", ' ', modern_tone); // dummy call for lint if needed
-    let _ = tone_index;
-
     let target_idx = if vowel_indices.len() == 1 {
         vowel_indices[0]
     } else {
-        // Tương tự quy tắc Telex
         let mut modified = None;
         for &idx in &vowel_indices {
             if let Some((_, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
