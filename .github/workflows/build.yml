@@ -30,15 +30,16 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Setup MSVC Developer Environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Run Tests
         run: cargo test --verbose
 
       - name: Compile Resource & Build Release Binary
         shell: powershell
         run: |
-          $rcExe = (Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio" -Filter rc.exe -Recurse | Where-Object { $_.FullName -like "*x64*" } | Select-Object -First 1).FullName
-          Write-Host "Using Windows Resource Compiler: $rcExe"
-          & $rcExe /fo app.res app.rc
+          rc.exe /fo app.res app.rc
           $env:RUSTFLAGS = "-C link-arg=app.res"
           cargo build --release
 
