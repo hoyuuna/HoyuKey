@@ -178,6 +178,7 @@ mod tests {
 
         engine.reset();
         // Gõ "quốc" -> q, u, o, o, c, s
+        // Lưu ý: sau khi gõ 'oo', từ hiển thị là "quô" (3 ký tự), thêm 'c' là "quôc" (4 ký tự)
         engine.process_char('q', &config);
         engine.process_char('u', &config);
         engine.process_char('o', &config);
@@ -187,7 +188,7 @@ mod tests {
         assert_eq!(
             action,
             KeyAction::Transform {
-                backspaces: 5,
+                backspaces: 4,
                 text: "quốc".to_string(),
             }
         );
