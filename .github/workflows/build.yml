@@ -3,9 +3,6 @@ name: Build and Release HoyuKey
 on:
   push:
     branches: [ "master", "main" ]
-    tags: [ "v*" ]
-  pull_request:
-    branches: [ "master", "main" ]
   workflow_dispatch:
 
 permissions:
@@ -13,12 +10,19 @@ permissions:
 
 jobs:
   build:
-    name: Build Windows x64 Binary
+    name: Build & Publish Release
     runs-on: windows-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set dynamic version in Cargo.toml
+        shell: powershell
+        run: |
+          $ver = "0.1.${{ github.run_number }}"
+          Write-Host "Setting version to $ver in Cargo.toml..."
+          (Get-Content Cargo.toml) -replace 'version = "0.1.0"', "version = `"$ver`"" | Set-Content Cargo.toml
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -32,26 +36,42 @@ jobs:
       - name: Build Release Binary
         run: cargo build --release
 
-      - name: Prepare Artifact
+      - name: Package Release
         shell: powershell
         run: |
+          $ver = "0.1.${{ github.run_number }}"
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item target/release/hoyukey.exe dist/HoyuKey.exe
           Copy-Item README.md dist/README.md
+          Compress-Archive -Path dist/* -DestinationPath "dist/HoyuKey-v$ver-win64.zip"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HoyuKey-Windows-x64
+          name: HoyuKey-v0.1.${{ github.run_number }}-Windows-x64
           path: dist/*
           retention-days: 30
 
-      - name: Create GitHub Release (On Tag)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish GitHub Pre-Release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v0.1.${{ github.run_number }}
+          name: "HoyuKey v0.1.${{ github.run_number }} (Pre-release)"
+          body: |
+            ### ⌨️ HoyuKey Pre-release v0.1.${{ github.run_number }}
+            
+            Phiên bản pre-release được build tự động qua GitHub Actions từ branch `${{ github.ref_name }}`.
+
+            - **Phiên bản**: `0.1.${{ github.run_number }}`
+            - **Commit**: `${{ github.sha }}`
+            - **Build**: #${{ github.run_number }}
+
+            #### 📦 Tệp tải về:
+            - **`HoyuKey.exe`**: Tải về và chạy trực tiếp trên Windows (không cần cài đặt).
+            - **`HoyuKey-v0.1.${{ github.run_number }}-win64.zip`**: File nén chứa `.exe` kèm tài liệu hướng dẫn.
+          prerelease: true
+          draft: false
           files: |
             dist/HoyuKey.exe
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+            dist/HoyuKey-v0.1.${{ github.run_number }}-win64.zip
