@@ -811,27 +811,46 @@ mod tests {
         );
         assert_eq!(engine.current_word, "w");
 
-        // 3. Gõ 'w' lần 3 -> "wư"
+        // 3. Gõ 'w' lần 3 -> ký tự 'w' đi qua tự nhiên thành "ww" (để người dùng có thể gõ www, web...)
+        let a3 = engine.process_char('w', &config);
+        assert_eq!(a3, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "ww");
+
+        // 4. Gõ 'w' lần 4 -> ký tự 'w' đi qua tự nhiên thành "www"
+        let a4 = engine.process_char('w', &config);
+        assert_eq!(a4, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "www");
+    }
+
+    #[test]
+    fn test_telex_tw() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        let a1 = engine.process_char('t', &config);
+        assert_eq!(a1, KeyAction::PassThrough);
+
+        // 't' + 'w' -> "tư"
+        let a2 = engine.process_char('w', &config);
+        assert_eq!(
+            a2,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "tư".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "tư");
+
+        // "tư" + 'w' -> "tw" (hoàn tác)
         let a3 = engine.process_char('w', &config);
         assert_eq!(
             a3,
             KeyAction::Transform {
-                backspaces: 1,
-                text: "wư".to_string(),
-            }
-        );
-        assert_eq!(engine.current_word, "wư");
-
-        // 4. Gõ 'w' lần 4 -> hoàn tác thành "ww"
-        let a4 = engine.process_char('w', &config);
-        assert_eq!(
-            a4,
-            KeyAction::Transform {
                 backspaces: 2,
-                text: "ww".to_string(),
+                text: "tw".to_string(),
             }
         );
-        assert_eq!(engine.current_word, "ww");
+        assert_eq!(engine.current_word, "tw");
     }
 
     #[test]

@@ -320,8 +320,9 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
         }
     }
 
-    // 5. Nếu gõ 'w' độc lập sau phụ âm hoặc ở cuối từ
-    if key == 'w' {
+    // 5. Nếu gõ 'w' độc lập sau phụ âm tiếng Việt (ví dụ: 't' + 'w' -> 'tư', 's' + 'w' -> 'sư')
+    // Chú ý: Không áp dụng nếu ký tự trước là 'w' hoặc ngoại lai để người dùng có thể gõ 'ww', 'www' bình thường
+    if key == 'w' && last_c.is_alphabetic() && super::vietnamese::is_consonant(last_c) {
         let mut new_chars = chars.clone();
         new_chars.push(if is_upper { 'Ư' } else { 'ư' });
         return Some(new_chars.into_iter().collect());
