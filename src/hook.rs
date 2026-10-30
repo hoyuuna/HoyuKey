@@ -11,9 +11,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, SetWindowsHookExW,
-    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
-    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
+    PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, GUITHREADINFO, HHOOK, KBDLLHOOKSTRUCT,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::config::SwitchKey;
@@ -324,6 +325,22 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
     }
 }
 
+unsafe fn is_focused_in_web_content() -> bool {
+    let mut gui_info: GUITHREADINFO = std::mem::zeroed();
+    gui_info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    if GetGUIThreadInfo(0, &mut gui_info) != 0 && !gui_info.hwndFocus.is_null() {
+        let mut class_buf = [0u16; 256];
+        let len = GetClassNameW(gui_info.hwndFocus, class_buf.as_mut_ptr(), class_buf.len() as i32);
+        if len > 0 {
+            let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
+            if class_name.contains("RenderWidgetHost") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 unsafe fn is_foreground_browser_app(apps_list: &str) -> bool {
     let hwnd = GetForegroundWindow();
     if hwnd.is_null() {
@@ -377,18 +394,22 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
         return;
     }
 
-    let is_browser = {
+    let (is_browser, has_space_before) = {
         let state = GLOBAL_STATE.lock().unwrap();
         if state.config.browser_compatibility && backspaces > 0 {
-            is_foreground_browser_app(&state.config.browser_apps)
+            (is_foreground_browser_app(&state.config.browser_apps), state.engine.has_space_before)
         } else {
-            false
+            (false, false)
         }
     };
 
-    // Khi ở trên trình duyệt (Chrome, Edge... Omnibox), nếu có selection autocomplete,
-    // ta gửi thêm 1 phím Backspace phụ ban đầu để nuốt trọn vùng chọn, tránh lỗi dđ / toó.
-    let total_backspaces = if is_browser { backspaces + 1 } else { backspaces };
+    // Chỉ nuốt vùng chọn inline autocomplete khi:
+    // 1. Ứng dụng là trình duyệt (Chrome, Edge...)
+    // 2. Không phải đang gõ trong nội dung trang web (Google Docs, web search, text input...)
+    // 3. Chưa có dấu cách phía trước (!has_space_before)
+    // 4. Và là biến đổi ở ký tự đầu tiên (backspaces == 1)
+    let need_omnibox_fix = is_browser && !has_space_before && backspaces == 1 && !is_focused_in_web_content();
+    let total_backspaces = if need_omnibox_fix { backspaces + 1 } else { backspaces };
     let mut inputs = Vec::with_capacity(total_backspaces * 2 + text.encode_utf16().count() * 2);
 
     // 1. Gửi chính xác số lượng phím Backspace cần xóa

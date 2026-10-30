@@ -1337,9 +1337,9 @@ unsafe fn render_page_elements(
         // ========================================================
         let sy = scroll_y.round() as i32;
 
-        // 1. Header tinh gọn: Logo 48x48 + Tiêu đề "HoyuKey Dashboard"
+        // 1. Header tinh gọn: Logo 48x48 + Tiêu đề "DASHBOARD"
         gdiplus_draw_image(graphics, card_x, 22 - sy, 48, 48, LOGO_BGRA_128, 128, 128);
-        draw_gdip_text(graphics, font_title, "HoyuKey Dashboard", card_x + 60, 26 - sy, ARGB_TEXT_PRIMARY, false);
+        draw_gdip_text(graphics, font_title, "DASHBOARD", card_x + 60, 26 - sy, ARGB_TEXT_PRIMARY, false);
 
         // 2. Card Trạng thái hệ thống (y = 86..158, cao 72px)
         let mode_p = MODE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
@@ -1453,8 +1453,8 @@ unsafe fn render_page_elements(
                 font_tab,
             );
 
-            // Card 2: 5 Tùy chọn đánh máy thông minh (y = 174..544, cao 370px)
-            gdiplus_draw_rounded_card(graphics, card_x, 174, card_w, 370, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            // Card 2: 5 Tùy chọn đánh máy thông minh (y = 174..530, cao 356px)
+            gdiplus_draw_rounded_card(graphics, card_x, 174, card_w, 356, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Bỏ dấu kiểu mới
             draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 188, ARGB_TEXT_PRIMARY, false);
@@ -1587,8 +1587,8 @@ unsafe fn render_page_elements(
             // --- Trang Hỗ trợ viết ---
             draw_gdip_text(graphics, font_sub_title, "Hỗ trợ viết", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
 
-            // Card 3 tùy chọn hỗ trợ soạn thảo (cao 226px, y = 86..312)
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 226, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            // Card 3 tùy chọn hỗ trợ soạn thảo (cao 214px, y = 86..300)
+            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 214, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Tự động viết hoa đầu dòng
             draw_gdip_text(graphics, font_bold, "Tự động viết hoa đầu dòng", left_text, 100, ARGB_TEXT_PRIMARY, false);

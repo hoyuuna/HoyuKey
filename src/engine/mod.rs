@@ -30,6 +30,7 @@ pub struct Engine {
     pub saw_sentence_end_punct: bool,
     pub has_typed_in_line: bool,
     pub last_char_typed: Option<char>,
+    pub has_space_before: bool,
 }
 
 impl Engine {
@@ -44,6 +45,7 @@ impl Engine {
             saw_sentence_end_punct: false,
             has_typed_in_line: false,
             last_char_typed: None,
+            has_space_before: false,
         }
     }
 
@@ -61,6 +63,7 @@ impl Engine {
         self.saw_sentence_end_punct = false;
         self.has_typed_in_line = false;
         self.last_char_typed = Some('\n');
+        self.has_space_before = false;
     }
 
     pub fn on_window_change(&mut self) {
@@ -70,6 +73,7 @@ impl Engine {
         self.saw_sentence_end_punct = false;
         self.has_typed_in_line = false;
         self.last_char_typed = None;
+        self.has_space_before = false;
     }
 
     pub fn should_auto_period_before_enter(&self) -> bool {
@@ -114,6 +118,7 @@ impl Engine {
         // 1. Phím khoảng trắng (Space / Tab): ngắt từ và tạm lưu từ vừa gõ phòng khi cần sửa ngay
         if c.is_whitespace() {
             self.last_char_typed = Some(c);
+            self.has_space_before = true;
             if self.saw_sentence_end_punct {
                 self.after_sentence_end = true;
             }
@@ -134,6 +139,7 @@ impl Engine {
         // Kết thúc cụm từ hoàn toàn, reset sạch buffer để không bao giờ bị nhảy nhầm chữ ("luôn, " không bị thành "luoon")
         if is_word_boundary(c) {
             self.last_char_typed = Some(c);
+            self.has_space_before = true;
             if matches!(c, '.' | '?' | '!') {
                 self.saw_sentence_end_punct = true;
                 self.after_sentence_end = false;
@@ -935,5 +941,46 @@ mod tests {
             engine.process_char(ch, &config);
         }
         assert_eq!(engine.current_word, "cacao");
+    }
+
+    #[test]
+    fn test_capslock_undo_tone() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // CapsLock bật: gõ 'D', 'A', 'S' -> 'DÁ'
+        engine.process_char('D', &config);
+        engine.process_char('A', &config);
+        let a = engine.process_char('S', &config);
+        assert_eq!(a, KeyAction::Transform { backspaces: 2, text: "DÁ".to_string() });
+        assert_eq!(engine.current_word, "DÁ");
+
+        // Ấn tiếp 'S' -> phải ra "DAS" viết HOA hoàn toàn, không được ra "DAs"!
+        let a2 = engine.process_char('S', &config);
+        assert_eq!(a2, KeyAction::Transform { backspaces: 2, text: "DAS".to_string() });
+        assert_eq!(engine.current_word, "DAS");
+    }
+
+    #[test]
+    fn test_space_tracking_browser() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "arial"
+        for ch in "arial".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.has_space_before, false);
+
+        // Gõ dấu cách
+        engine.process_char(' ', &config);
+        assert_eq!(engine.has_space_before, true);
+
+        // Gõ từ tiếp theo "là" (l + a + f)
+        engine.process_char('l', &config);
+        engine.process_char('a', &config);
+        let a = engine.process_char('f', &config);
+        assert_eq!(a, KeyAction::Transform { backspaces: 2, text: "là".to_string() });
+        assert_eq!(engine.has_space_before, true);
     }
 }
