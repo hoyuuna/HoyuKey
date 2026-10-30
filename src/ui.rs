@@ -5,7 +5,7 @@ use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, POINT, RECT
 use windows_sys::Win32::Graphics::Gdi::{
     AddFontMemResourceEx, AddFontResourceExW, BeginPaint, BitBlt, CreateCompatibleBitmap,
     CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint, InvalidateRect, ScreenToClient,
-    SelectObject, StretchBlt, SetStretchBltMode, GetDIBits, SetDIBits, UpdateWindow, BITMAPINFO, BITMAPINFOHEADER,
+    SelectObject, StretchBlt, SetStretchBltMode, GetDIBits, SetDIBits, BITMAPINFO, BITMAPINFOHEADER,
     BI_RGB, DIB_RGB_COLORS, HALFTONE, PAINTSTRUCT, SRCCOPY,
 };
 use windows_sys::Win32::Graphics::GdiPlus::*;
@@ -21,12 +21,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
-
-#[link(name = "winmm")]
-extern "system" {
-    fn timeBeginPeriod(uPeriod: u32) -> u32;
-    fn timeEndPeriod(uPeriod: u32) -> u32;
-}
 
 use crate::config::{Config, InputMethod, SwitchKey};
 use crate::tray::WM_APP_UPDATE_TRAY;
@@ -112,9 +106,6 @@ const ARGB_MODAL_BORDER: u32 = 0xFF2E2E34;    // Viền modal
 
 pub fn init_ui_subsystems() {
     unsafe {
-        // Nâng timer resolution lên 1ms giúp hoạt họa 60 FPS mượt mà tuyệt đối
-        timeBeginPeriod(1);
-
         let mut token: usize = 0;
         let input = GdiplusStartupInput {
             GdiplusVersion: 1,
@@ -149,27 +140,18 @@ pub fn init_ui_subsystems() {
 
 pub fn shutdown_ui_subsystems() {
     unsafe {
-        let mut lock = CACHED_ASSETS.lock().unwrap();
-        if let Some(assets) = lock.take() {
-            GdipDeleteFont(assets.font_title);
-            GdipDeleteFont(assets.font_sub_title);
-            GdipDeleteFont(assets.font_modal_title);
-            GdipDeleteFont(assets.font_bold);
-            GdipDeleteFont(assets.font_desc);
-            GdipDeleteFont(assets.font_section);
-            GdipDeleteFont(assets.font_tab);
-            GdipDeleteFont(assets.font_btn);
-            if !assets.family.is_null() {
-                GdipDeleteFontFamily(assets.family);
-            }
-            if !assets.bmp_logo.is_null() {
-                GdipDisposeImage(assets.bmp_logo as *mut GpImage);
-            }
-            if !assets.bmp_icon_e.is_null() {
-                GdipDisposeImage(assets.bmp_icon_e as *mut GpImage);
-            }
-            if !assets.bmp_icon_v.is_null() {
-                GdipDisposeImage(assets.bmp_icon_v as *mut GpImage);
+        let mut lock = CACHED_FONTS.lock().unwrap();
+        if let Some(fonts) = lock.take() {
+            GdipDeleteFont(fonts.font_title);
+            GdipDeleteFont(fonts.font_sub_title);
+            GdipDeleteFont(fonts.font_modal_title);
+            GdipDeleteFont(fonts.font_bold);
+            GdipDeleteFont(fonts.font_desc);
+            GdipDeleteFont(fonts.font_section);
+            GdipDeleteFont(fonts.font_tab);
+            GdipDeleteFont(fonts.font_btn);
+            if !fonts.family.is_null() {
+                GdipDeleteFontFamily(fonts.family);
             }
         }
     }
@@ -177,7 +159,6 @@ pub fn shutdown_ui_subsystems() {
     if token != 0 {
         unsafe {
             GdiplusShutdown(token);
-            timeEndPeriod(1);
         }
     }
 }
@@ -373,15 +354,15 @@ unsafe extern "system" fn settings_wnd_proc(
 
                 let mut still_animating = false;
 
-                // 1. Page transition slide animation (chuẩn 60 FPS mượt mà)
+                // 1. Page transition slide animation (nhanh, dứt khoát chỉ trong 5-6 frame)
                 let curr_trans = TRANSITION_PROGRESS.load(Ordering::SeqCst);
                 if curr_trans < 1000 {
                     still_animating = true;
                     let diff = 1000 - curr_trans as i32;
-                    let next = if diff <= 25 {
+                    let next = if diff <= 40 {
                         1000
                     } else {
-                        let step = (diff * 2 / 5).max(75);
+                        let step = (diff / 2).max(140);
                         (curr_trans as i32 + step).min(1000) as u32
                     };
                     TRANSITION_PROGRESS.store(next, Ordering::SeqCst);
@@ -397,11 +378,11 @@ unsafe extern "system" fn settings_wnd_proc(
                     if curr != target {
                         still_animating = true;
                         let diff = target as i32 - curr as i32;
-                        let next = if diff.abs() <= 20 {
+                        let next = if diff.abs() <= 35 {
                             target
                         } else {
-                            let step = (diff * 3 / 8).clamp(-180, 180);
-                            let step = if step.abs() < 40 { if diff > 0 { 40 } else { -40 } } else { step };
+                            let step = (diff / 2).clamp(-250, 250);
+                            let step = if step.abs() < 60 { if diff > 0 { 60 } else { -60 } } else { step };
                             (curr as i32 + step).clamp(0, 1000) as u32
                         };
                         current_atom.store(next, Ordering::SeqCst);
@@ -428,10 +409,10 @@ unsafe extern "system" fn settings_wnd_proc(
                     if curr_modal_anim < 1000 {
                         still_animating = true;
                         let diff = 1000 - curr_modal_anim;
-                        let next = if diff <= 30 {
+                        let next = if diff <= 40 {
                             1000
                         } else {
-                            let step = (diff * 2 / 5).max(75);
+                            let step = (diff / 2).max(80);
                             (curr_modal_anim + step).min(1000)
                         };
                         MODAL_ANIM_PROGRESS.store(next, Ordering::SeqCst);
@@ -439,7 +420,6 @@ unsafe extern "system" fn settings_wnd_proc(
                 }
 
                 InvalidateRect(hwnd, null_mut(), 0);
-                UpdateWindow(hwnd);
 
                 if !still_animating {
                     KillTimer(hwnd, TIMER_ID_ANIM);
@@ -837,7 +817,7 @@ fn start_page_transition(hwnd: HWND, target_page: u8, direction: i32) {
 }
 
 #[derive(Clone, Copy)]
-struct CachedAssets {
+struct CachedFonts {
     family: *mut GpFontFamily,
     font_title: *mut GpFont,
     font_sub_title: *mut GpFont,
@@ -847,20 +827,17 @@ struct CachedAssets {
     font_section: *mut GpFont,
     font_tab: *mut GpFont,
     font_btn: *mut GpFont,
-    bmp_logo: *mut GpBitmap,
-    bmp_icon_e: *mut GpBitmap,
-    bmp_icon_v: *mut GpBitmap,
 }
 
-unsafe impl Send for CachedAssets {}
-unsafe impl Sync for CachedAssets {}
+unsafe impl Send for CachedFonts {}
+unsafe impl Sync for CachedFonts {}
 
-static CACHED_ASSETS: Mutex<Option<CachedAssets>> = Mutex::new(None);
+static CACHED_FONTS: Mutex<Option<CachedFonts>> = Mutex::new(None);
 
-unsafe fn get_cached_assets() -> CachedAssets {
-    let mut lock = CACHED_ASSETS.lock().unwrap();
-    if let Some(assets) = *lock {
-        return assets;
+unsafe fn get_cached_fonts() -> CachedFonts {
+    let mut lock = CACHED_FONTS.lock().unwrap();
+    if let Some(fonts) = *lock {
+        return fonts;
     }
 
     let mut family: *mut GpFontFamily = null_mut();
@@ -875,17 +852,7 @@ unsafe fn get_cached_assets() -> CachedAssets {
         GdipCreateFontFamilyFromName(fallback2.as_ptr(), null_mut(), &mut family);
     }
 
-    const PIXEL_FORMAT_32BPP_PARGB: i32 = 0x000E200B;
-    let mut bmp_logo: *mut GpBitmap = null_mut();
-    GdipCreateBitmapFromScan0(128, 128, 128 * 4, PIXEL_FORMAT_32BPP_PARGB, LOGO_BGRA_128.as_ptr() as _, &mut bmp_logo);
-
-    let mut bmp_icon_e: *mut GpBitmap = null_mut();
-    GdipCreateBitmapFromScan0(32, 32, 32 * 4, PIXEL_FORMAT_32BPP_PARGB, E_BGRA_32.as_ptr() as _, &mut bmp_icon_e);
-
-    let mut bmp_icon_v: *mut GpBitmap = null_mut();
-    GdipCreateBitmapFromScan0(32, 32, 32 * 4, PIXEL_FORMAT_32BPP_PARGB, V_BGRA_32.as_ptr() as _, &mut bmp_icon_v);
-
-    let assets = CachedAssets {
+    let fonts = CachedFonts {
         family,
         font_title: create_gdip_font(family, 24.0, FontStyleBold),
         font_sub_title: create_gdip_font(family, 21.0, FontStyleBold),
@@ -895,13 +862,10 @@ unsafe fn get_cached_assets() -> CachedAssets {
         font_section: create_gdip_font(family, 11.0, FontStyleBold),
         font_tab: create_gdip_font(family, 12.0, FontStyleBold),
         font_btn: create_gdip_font(family, 14.0, FontStyleBold),
-        bmp_logo,
-        bmp_icon_e,
-        bmp_icon_v,
     };
 
-    *lock = Some(assets);
-    assets
+    *lock = Some(fonts);
+    fonts
 }
 
 unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h: i32, config: &Config) {
@@ -927,10 +891,15 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     GdipDeletePath(bg_path);
     GdipDeleteBrush(bg_brush as *mut GpBrush);
 
-    let assets = get_cached_assets();
-    let font_modal_title = assets.font_modal_title;
-    let font_desc = assets.font_desc;
-    let font_btn = assets.font_btn;
+    let fonts = get_cached_fonts();
+    let font_title = fonts.font_title;
+    let font_sub_title = fonts.font_sub_title;
+    let font_modal_title = fonts.font_modal_title;
+    let font_bold = fonts.font_bold;
+    let font_desc = fonts.font_desc;
+    let font_section = fonts.font_section;
+    let font_tab = fonts.font_tab;
+    let font_btn = fonts.font_btn;
 
     let (card_x, card_w, _card_right, right_ctrl, left_text, _) = get_layout_metrics(w);
 
@@ -942,7 +911,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
 
     let progress = trans_raw as f32 / 1000.0;
     let ease = 1.0 - (1.0 - progress).powi(3);
-    let slide_distance = 36.0; // Subtle & ultra-smooth slide
+    let slide_distance = (card_w + 48) as f32;
 
     if trans_raw >= 1000 {
         render_page_elements(
@@ -955,7 +924,13 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
             left_text,
             config,
             hover_id,
-            &assets,
+            font_title,
+            font_sub_title,
+            font_bold,
+            font_desc,
+            font_section,
+            font_tab,
+            font_btn,
         );
     } else {
         if trans_dir == 1 {
@@ -972,7 +947,13 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 left_text,
                 config,
                 hover_id,
-                &assets,
+                font_title,
+                font_sub_title,
+                font_bold,
+                font_desc,
+                font_section,
+                font_tab,
+                font_btn,
             );
 
             render_page_elements(
@@ -985,7 +966,13 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 left_text,
                 config,
                 hover_id,
-                &assets,
+                font_title,
+                font_sub_title,
+                font_bold,
+                font_desc,
+                font_section,
+                font_tab,
+                font_btn,
             );
         } else {
             let offset_curr = slide_distance * ease;
@@ -1001,7 +988,13 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 left_text,
                 config,
                 hover_id,
-                &assets,
+                font_title,
+                font_sub_title,
+                font_bold,
+                font_desc,
+                font_section,
+                font_tab,
+                font_btn,
             );
 
             render_page_elements(
@@ -1014,7 +1007,13 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 left_text,
                 config,
                 hover_id,
-                &assets,
+                font_title,
+                font_sub_title,
+                font_bold,
+                font_desc,
+                font_section,
+                font_tab,
+                font_btn,
             );
         }
     }
@@ -1158,19 +1157,17 @@ unsafe fn render_page_elements(
     base_left_text: i32,
     _config: &Config,
     hover_id: i32,
-    assets: &CachedAssets,
+    font_title: *mut GpFont,
+    font_sub_title: *mut GpFont,
+    font_bold: *mut GpFont,
+    font_desc: *mut GpFont,
+    font_section: *mut GpFont,
+    font_tab: *mut GpFont,
+    font_btn: *mut GpFont,
 ) {
     let card_x = (base_card_x as f32 + offset_x).round() as i32;
     let right_ctrl = (base_right_ctrl as f32 + offset_x).round() as i32;
     let left_text = (base_left_text as f32 + offset_x).round() as i32;
-
-    let font_title = assets.font_title;
-    let font_sub_title = assets.font_sub_title;
-    let font_bold = assets.font_bold;
-    let font_desc = assets.font_desc;
-    let font_section = assets.font_section;
-    let font_tab = assets.font_tab;
-    let font_btn = assets.font_btn;
 
     if page == 0 {
         // ========================================================
@@ -1178,7 +1175,7 @@ unsafe fn render_page_elements(
         // ========================================================
 
         // 1. Header tinh gọn: Logo 48x48 + Tiêu đề "HoyuKey Dashboard"
-        draw_cached_bitmap(graphics, card_x, 22, 48, 48, assets.bmp_logo, 128, 128);
+        gdiplus_draw_image(graphics, card_x, 22, 48, 48, LOGO_BGRA_128, 128, 128);
         draw_gdip_text(graphics, font_title, "HoyuKey Dashboard", card_x + 60, 26, ARGB_TEXT_PRIMARY, false);
 
         // 2. Card Trạng thái hệ thống (y = 86..158, cao 72px)
@@ -1193,8 +1190,8 @@ unsafe fn render_page_elements(
         let icon_y = 104;
         let icon_size = 36;
 
-        draw_cached_bitmap_alpha(graphics, icon_x, icon_y, icon_size, icon_size, assets.bmp_icon_e, 32, 32, 1.0 - mode_ease);
-        draw_cached_bitmap_alpha(graphics, icon_x, icon_y, icon_size, icon_size, assets.bmp_icon_v, 32, 32, mode_ease);
+        gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, E_BGRA_32, 32, 32, 1.0 - mode_ease);
+        gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, V_BGRA_32, 32, 32, mode_ease);
 
         // Tiêu đề & mô tả trạng thái (đặt ngay bên phải icon)
         let text_x = icon_x + icon_size + 16;
@@ -1361,7 +1358,7 @@ unsafe fn render_page_elements(
             gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 218, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             let center_x = card_x + card_w / 2;
-            draw_cached_bitmap(graphics, center_x - 30, 104, 60, 60, assets.bmp_logo, 128, 128);
+            gdiplus_draw_image(graphics, center_x - 30, 104, 60, 60, LOGO_BGRA_128, 128, 128);
 
             draw_gdip_text_centered(graphics, font_title, "HoyuKey", card_x, 172, card_w, 30, ARGB_TEXT_PRIMARY);
 
@@ -1726,97 +1723,6 @@ unsafe fn gdiplus_draw_line(
     GdipDeletePen(pen);
 }
 
-unsafe fn draw_cached_bitmap(
-    graphics: *mut GpGraphics,
-    dest_x: i32,
-    dest_y: i32,
-    dest_w: i32,
-    dest_h: i32,
-    bitmap: *mut GpBitmap,
-    src_w: i32,
-    src_h: i32,
-) {
-    if bitmap.is_null() {
-        return;
-    }
-    GdipDrawImageRectRectI(
-        graphics,
-        bitmap as *mut GpImage,
-        dest_x,
-        dest_y,
-        dest_w,
-        dest_h,
-        0,
-        0,
-        src_w,
-        src_h,
-        UnitPixel,
-        null_mut(),
-        0,
-        null_mut(),
-    );
-}
-
-unsafe fn draw_cached_bitmap_alpha(
-    graphics: *mut GpGraphics,
-    dest_x: i32,
-    dest_y: i32,
-    dest_w: i32,
-    dest_h: i32,
-    bitmap: *mut GpBitmap,
-    src_w: i32,
-    src_h: i32,
-    alpha: f32,
-) {
-    if bitmap.is_null() || alpha <= 0.01 {
-        return;
-    }
-
-    if (alpha - 1.0).abs() < 0.01 {
-        draw_cached_bitmap(graphics, dest_x, dest_y, dest_w, dest_h, bitmap, src_w, src_h);
-        return;
-    }
-
-    let mut image_attr: *mut GpImageAttributes = null_mut();
-    GdipCreateImageAttributes(&mut image_attr);
-
-    let mut cm: ColorMatrix = std::mem::zeroed();
-    cm.m[0] = 1.0;
-    cm.m[6] = 1.0;
-    cm.m[12] = 1.0;
-    cm.m[18] = alpha.clamp(0.0, 1.0);
-    cm.m[24] = 1.0;
-
-    GdipSetImageAttributesColorMatrix(
-        image_attr,
-        ColorAdjustTypeDefault,
-        1,
-        &cm,
-        null_mut(),
-        ColorMatrixFlagsDefault,
-    );
-
-    GdipDrawImageRectRectI(
-        graphics,
-        bitmap as *mut GpImage,
-        dest_x,
-        dest_y,
-        dest_w,
-        dest_h,
-        0,
-        0,
-        src_w,
-        src_h,
-        UnitPixel,
-        image_attr,
-        0,
-        null_mut(),
-    );
-
-    GdipDisposeImageAttributes(image_attr);
-}
-
-#[allow(dead_code)]
 unsafe fn gdiplus_draw_image(
     graphics: *mut GpGraphics,
     dest_x: i32,
@@ -1858,7 +1764,6 @@ unsafe fn gdiplus_draw_image(
     }
 }
 
-#[allow(dead_code)]
 unsafe fn gdiplus_draw_image_alpha(
     graphics: *mut GpGraphics,
     dest_x: i32,
