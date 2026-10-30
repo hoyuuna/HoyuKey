@@ -87,7 +87,13 @@ impl Engine {
 
         // 1. Thử biến đổi theo quy tắc Telex / VNI
         let transformed = match config.input_method {
-            InputMethod::Telex => telex::transform_telex(&self.current_word, c, config.modern_tone),
+            InputMethod::Telex => telex::transform_telex(
+                &self.current_word,
+                c,
+                config.modern_tone,
+                config.free_marking,
+                config.smart_english,
+            ),
             InputMethod::Vni => vni::transform_vni(&self.current_word, c, config.modern_tone),
         };
 
@@ -104,7 +110,7 @@ impl Engine {
         // 2. Tự động tái cân bằng vị trí dấu thanh (Dynamic Tone Re-balancing):
         // Nếu từ hiện tại đã có dấu thanh (ví dụ "khí" có dấu sắc), mà người dùng gõ thêm nguyên âm (như 'o', 'a'),
         // hệ thống tự động gỡ dấu cũ và tái định vị dấu thanh đúng quy tắc ngữ âm ("khoái" thay vì "khoaí")!
-        if c.is_ascii_alphabetic() && !telex::is_foreign_word(&self.current_word) {
+        if c.is_ascii_alphabetic() && (!config.smart_english || !telex::is_foreign_word(&self.current_word)) {
             let existing_tone = find_existing_tone(&self.current_word);
             if existing_tone != Tone::None {
                 // Tách dấu thanh cũ ra
@@ -392,5 +398,31 @@ mod tests {
             assert_eq!(action, KeyAction::PassThrough);
         }
         assert_eq!(engine.current_word, "animation");
+    }
+
+    #[test]
+    fn test_telex_toggle_free_marking() {
+        let mut engine = Engine::new();
+        let mut config = Config::default();
+        config.free_marking = false; // Tắt tính năng tự do
+
+        // Khi tắt free_marking: "hienej" -> không sửa "e" bên trong từ khi đã có "n"
+        for ch in "hienej".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_ne!(engine.current_word, "hiện");
+    }
+
+    #[test]
+    fn test_telex_toggle_smart_english() {
+        let mut engine = Engine::new();
+        let mut config = Config::default();
+        config.smart_english = false; // Tắt nhận diện tiếng Anh thông minh
+
+        // Khi tắt nhận diện tiếng Anh: "fix" sẽ bị Telex can thiệp vì chữ 'x' là dấu ngã
+        for ch in "fix".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "fĩ");
     }
 }

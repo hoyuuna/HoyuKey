@@ -30,6 +30,8 @@ const TIMER_ID_ANIM: usize = 1001;
 
 // Tiến trình hoạt họa các công tắc và thanh trượt (0 đến 1000 <=> 0.0 đến 1.0)
 static MODERN_TONE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
+static FREE_MARKING_PROGRESS: AtomicU32 = AtomicU32::new(1000);
+static SMART_ENGLISH_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
@@ -205,6 +207,8 @@ pub fn show_settings_window() {
     if hwnd != null_mut() {
         let state = GLOBAL_STATE.lock().unwrap();
         MODERN_TONE_PROGRESS.store(if state.config.modern_tone { 1000 } else { 0 }, Ordering::SeqCst);
+        FREE_MARKING_PROGRESS.store(if state.config.free_marking { 1000 } else { 0 }, Ordering::SeqCst);
+        SMART_ENGLISH_PROGRESS.store(if state.config.smart_english { 1000 } else { 0 }, Ordering::SeqCst);
         AUTO_RESTORE_PROGRESS.store(if state.config.auto_restore { 1000 } else { 0 }, Ordering::SeqCst);
         INPUT_METHOD_PROGRESS.store(if state.config.input_method == InputMethod::Vni { 1000 } else { 0 }, Ordering::SeqCst);
         SWITCH_KEY_PROGRESS.store(if state.config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, Ordering::SeqCst);
@@ -304,6 +308,28 @@ unsafe extern "system" fn settings_wnd_proc(
                     let step = if diff == 0 { if target_tone > curr_tone { 1 } else { -1 } } else { diff };
                     let next = (curr_tone as i32 + step).clamp(0, 1000) as u32;
                     MODERN_TONE_PROGRESS.store(next, Ordering::SeqCst);
+                }
+
+                // 2b. Free Marking Switch animation
+                let target_free = if config.free_marking { 1000 } else { 0 };
+                let curr_free = FREE_MARKING_PROGRESS.load(Ordering::SeqCst);
+                if curr_free != target_free {
+                    still_animating = true;
+                    let diff = (target_free as i32 - curr_free as i32) / 3;
+                    let step = if diff == 0 { if target_free > curr_free { 1 } else { -1 } } else { diff };
+                    let next = (curr_free as i32 + step).clamp(0, 1000) as u32;
+                    FREE_MARKING_PROGRESS.store(next, Ordering::SeqCst);
+                }
+
+                // 2c. Smart English Switch animation
+                let target_smart = if config.smart_english { 1000 } else { 0 };
+                let curr_smart = SMART_ENGLISH_PROGRESS.load(Ordering::SeqCst);
+                if curr_smart != target_smart {
+                    still_animating = true;
+                    let diff = (target_smart as i32 - curr_smart as i32) / 3;
+                    let step = if diff == 0 { if target_smart > curr_smart { 1 } else { -1 } } else { diff };
+                    let next = (curr_smart as i32 + step).clamp(0, 1000) as u32;
+                    SMART_ENGLISH_PROGRESS.store(next, Ordering::SeqCst);
                 }
 
                 // 3. Auto Restore Switch animation
@@ -480,14 +506,22 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
         if page == 1 {
             // Cài đặt đánh máy:
             let tab_x = right_ctrl - 200;
-            if x >= tab_x && x <= right_ctrl && y >= 105 && y <= 145 {
+            if x >= tab_x && x <= right_ctrl && y >= 101 && y <= 145 {
                 return 40;
             }
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 204 && y <= 236 {
-                return 41;
-            }
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 280 && y <= 312 {
-                return 42;
+            if x >= right_ctrl - 52 && x <= right_ctrl {
+                if y >= 194 && y <= 236 {
+                    return 41;
+                }
+                if y >= 266 && y <= 308 {
+                    return 42;
+                }
+                if y >= 338 && y <= 380 {
+                    return 44;
+                }
+                if y >= 410 && y <= 452 {
+                    return 45;
+                }
             }
         } else if page == 2 {
             // Cài đặt HoyuKey:
@@ -604,7 +638,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
 
         if page == 1 {
             let tab_x = right_ctrl - 200;
-            if y >= 105 && y <= 145 {
+            if y >= 101 && y <= 145 {
                 if x >= tab_x && x <= tab_x + 96 {
                     if state.config.input_method != InputMethod::Telex {
                         state.config.input_method = InputMethod::Telex;
@@ -618,14 +652,20 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                 }
             }
 
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 204 && y <= 236 {
-                state.config.modern_tone = !state.config.modern_tone;
-                changed = true;
-            }
-
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 280 && y <= 312 {
-                state.config.auto_restore = !state.config.auto_restore;
-                changed = true;
+            if x >= right_ctrl - 52 && x <= right_ctrl {
+                if y >= 194 && y <= 236 {
+                    state.config.modern_tone = !state.config.modern_tone;
+                    changed = true;
+                } else if y >= 266 && y <= 308 {
+                    state.config.free_marking = !state.config.free_marking;
+                    changed = true;
+                } else if y >= 338 && y <= 380 {
+                    state.config.smart_english = !state.config.smart_english;
+                    changed = true;
+                } else if y >= 410 && y <= 452 {
+                    state.config.auto_restore = !state.config.auto_restore;
+                    changed = true;
+                }
             }
         } else if page == 2 {
             let sw_tab_w = 116;
@@ -1048,7 +1088,7 @@ unsafe fn render_page_elements(
         draw_vector_keyboard_icon(graphics, left_text + 20, 233, ARGB_TEXT_PRIMARY);
 
         draw_gdip_text(graphics, font_bold, "Cài đặt đánh máy", left_text + 52, 211, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Kiểu gõ Telex / VNI, bỏ dấu mới, khôi phục phím", left_text + 52, 235, ARGB_TEXT_MUTED, false);
+        draw_gdip_text(graphics, font_desc, "Kiểu gõ, bỏ dấu tự do, nhận diện tiếng Anh", left_text + 52, 235, ARGB_TEXT_MUTED, false);
         let arrow1_color = if hover_id == 11 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
         draw_vector_chevron_right(graphics, right_ctrl - 12, 233, arrow1_color);
 
@@ -1086,15 +1126,15 @@ unsafe fn render_page_elements(
             // --- Trang Cài đặt đánh máy ---
             draw_gdip_text(graphics, font_sub_title, "Cài đặt đánh máy", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
 
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 86, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-            draw_gdip_text(graphics, font_bold, "Kiểu gõ chính", left_text, 105, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Chọn phương thức gõ Telex hoặc VNI", left_text, 131, ARGB_TEXT_MUTED, false);
+            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 80, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            draw_gdip_text(graphics, font_bold, "Kiểu gõ chính", left_text, 101, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Chọn phương thức gõ Telex hoặc VNI", left_text, 127, ARGB_TEXT_MUTED, false);
 
             let method_progress = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_tabs(
                 graphics,
                 right_ctrl - 200,
-                105,
+                101,
                 &["Telex", "VNI"],
                 96,
                 40,
@@ -1102,19 +1142,38 @@ unsafe fn render_page_elements(
                 font_tab,
             );
 
-            gdiplus_draw_rounded_card(graphics, card_x, 186, card_w, 164, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            // Card 2: 4 Tùy chọn đánh máy thông minh (cao 304px, y = 180..484)
+            gdiplus_draw_rounded_card(graphics, card_x, 180, card_w, 304, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
-            draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 201, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Đặt dấu ở âm thứ hai: hóa, hòa thay vì hoá, hoà", left_text, 226, ARGB_TEXT_MUTED, false);
+            // 1. Bỏ dấu kiểu mới
+            draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 195, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Đặt dấu ở âm thứ hai: hóa, hòa thay vì hoá, hoà", left_text, 220, ARGB_TEXT_MUTED, false);
             let tone_progress = MODERN_TONE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 208, tone_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 202, tone_progress);
 
-            gdiplus_draw_line(graphics, left_text, 268, right_ctrl, 268, ARGB_DIVIDER, 1.0);
+            gdiplus_draw_line(graphics, left_text, 255, right_ctrl, 255, ARGB_DIVIDER, 1.0);
 
-            draw_gdip_text(graphics, font_bold, "Tự động khôi phục phím", left_text, 283, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Khôi phục ký tự gốc khi gõ lặp dấu hoặc từ sai", left_text, 308, ARGB_TEXT_MUTED, false);
+            // 2. Bỏ dấu & thêm mũ tự do
+            draw_gdip_text(graphics, font_bold, "Bỏ dấu & thêm mũ tự do", left_text, 270, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Bỏ dấu hoặc thêm mũ bất kỳ lúc nào (hienej -> hiện)", left_text, 295, ARGB_TEXT_MUTED, false);
+            let free_marking_progress = FREE_MARKING_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, 277, free_marking_progress);
+
+            gdiplus_draw_line(graphics, left_text, 330, right_ctrl, 330, ARGB_DIVIDER, 1.0);
+
+            // 3. Nhận diện tiếng Anh thông minh
+            draw_gdip_text(graphics, font_bold, "Nhận diện tiếng Anh thông minh", left_text, 345, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Tự động giữ nguyên từ tiếng Anh không gõ nhầm (fix, wifi)", left_text, 370, ARGB_TEXT_MUTED, false);
+            let smart_english_progress = SMART_ENGLISH_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, 352, smart_english_progress);
+
+            gdiplus_draw_line(graphics, left_text, 405, right_ctrl, 405, ARGB_DIVIDER, 1.0);
+
+            // 4. Tự động khôi phục phím
+            draw_gdip_text(graphics, font_bold, "Tự động khôi phục phím", left_text, 420, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Khôi phục ký tự gốc khi gõ lặp dấu hoặc từ sai", left_text, 445, ARGB_TEXT_MUTED, false);
             let restore_progress = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 288, restore_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 427, restore_progress);
 
         } else if page == 2 {
             // --- Trang Cài đặt HoyuKey ---

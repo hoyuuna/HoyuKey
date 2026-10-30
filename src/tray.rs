@@ -10,11 +10,11 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
-    PostMessageW, SetForegroundWindow, TrackPopupMenuEx, HICON, HMENU, ICONINFO, MF_CHECKED,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
+    PostMessageW, SetForegroundWindow, SetMenuDefaultItem, TrackPopupMenuEx, HICON, HMENU, ICONINFO,
+    MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
 };
 
-use crate::config::{Config, InputMethod};
+use crate::config::Config;
 
 pub const WM_APP_TRAY: u32 = 0x8000 + 1; // WM_USER + 1
 pub const WM_APP_UPDATE_TRAY: u32 = 0x8000 + 2;
@@ -118,41 +118,21 @@ impl TrayManager {
         }
     }
 
-    pub fn show_context_menu(&self, config: &Config) {
+    pub fn show_context_menu(&self, _config: &Config) {
         unsafe {
             let menu: HMENU = CreatePopupMenu();
             if menu == null_mut() {
                 return;
             }
 
-            // Tiếng Việt / Tiếng Anh
-            let vi_flag = if config.enabled { MF_CHECKED } else { MF_UNCHECKED };
-            let en_flag = if !config.enabled { MF_CHECKED } else { MF_UNCHECKED };
-            append_menu(menu, vi_flag, IDM_TOGGLE_MODE, "[V] Tiếng Việt (Bật)");
-            append_menu(menu, en_flag, IDM_TOGGLE_MODE, "[E] Tiếng Anh (Tắt)");
+            // 1. Mở Dashboard (In đậm - Default Action)
+            append_menu(menu, MF_STRING, IDM_CONTROL_PANEL, "Mở Dashboard");
+            SetMenuDefaultItem(menu, IDM_CONTROL_PANEL as u32, 0);
 
             append_separator(menu);
 
-            // Kiểu gõ
-            let telex_flag = if config.input_method == InputMethod::Telex { MF_CHECKED } else { MF_UNCHECKED };
-            let vni_flag = if config.input_method == InputMethod::Vni { MF_CHECKED } else { MF_UNCHECKED };
-            append_menu(menu, telex_flag, IDM_TELEX, "Kiểu gõ Telex");
-            append_menu(menu, vni_flag, IDM_VNI, "Kiểu gõ VNI");
-
-            append_separator(menu);
-
-            // Tùy chọn dấu
-            let tone_flag = if config.modern_tone { MF_CHECKED } else { MF_UNCHECKED };
-            let restore_flag = if config.auto_restore { MF_CHECKED } else { MF_UNCHECKED };
-            append_menu(menu, tone_flag, IDM_MODERN_TONE, "Bỏ dấu kiểu mới (hòa, hóa)");
-            append_menu(menu, restore_flag, IDM_AUTO_RESTORE, "Tự động khôi phục phím");
-
-            append_separator(menu);
-
-            // Bảng điều khiển & Thoát
-            append_menu(menu, MF_STRING, IDM_CONTROL_PANEL, "Bảng điều khiển HoyuKey...");
-            append_separator(menu);
-            append_menu(menu, MF_STRING, IDM_EXIT, "Kết thúc (Thoát HoyuKey)");
+            // 2. Thoát
+            append_menu(menu, MF_STRING, IDM_EXIT, "Thoát");
 
             let mut pt: POINT = std::mem::zeroed();
             GetCursorPos(&mut pt);
