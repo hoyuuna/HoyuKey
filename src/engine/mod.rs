@@ -171,13 +171,17 @@ impl Engine {
 
                 if tone_key != ' ' {
                     if let Some(rebalanced_word) = telex::handle_tone_modifier(&temp_word, tone_key, config.modern_tone) {
-                        if rebalanced_word != temp_word {
+                        let mut expected_no_move = self.current_word.clone();
+                        expected_no_move.push(c);
+
+                        // Chỉ can thiệp nếu vị trí dấu thanh thật sự bị dịch chuyển giữa các nguyên âm
+                        if rebalanced_word != expected_no_move {
                             let backspaces = self.current_word.chars().count();
                             self.current_word = rebalanced_word.clone();
                             self.has_transformed = true;
 
                             if config.auto_restore && !is_valid_vietnamese_syllable(&self.current_word) {
-                                let bs = self.current_word.chars().count();
+                                let bs = backspaces;
                                 let text = self.raw_keys.clone();
                                 self.reset();
                                 return KeyAction::Transform {
@@ -560,7 +564,7 @@ mod tests {
         for ch in "hoaf".chars() {
             engine.process_char(ch, &config);
         }
-        assert_eq!(engine.current_word, "hòa");
+        assert_eq!(engine.current_word, "hoà");
 
         let mut engine_old = Engine::new();
         let mut config_old = Config::default();
@@ -569,7 +573,7 @@ mod tests {
         for ch in "hoaf".chars() {
             engine_old.process_char(ch, &config_old);
         }
-        assert_eq!(engine_old.current_word, "hoà");
+        assert_eq!(engine_old.current_word, "hòa");
     }
 
     #[test]
@@ -589,6 +593,7 @@ mod tests {
         let mut engine = Engine::new();
         let mut config = Config::default();
         config.smart_english = false;
+        config.auto_restore = false;
 
         for ch in "fix".chars() {
             engine.process_char(ch, &config);
