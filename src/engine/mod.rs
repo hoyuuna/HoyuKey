@@ -220,11 +220,10 @@ mod tests {
         let mut engine = Engine::new();
         let config = Config::default();
 
-        // Gõ "luôn, "
-        for ch in "luon".chars() {
+        // Gõ "luoon" -> "luôn"
+        for ch in "luoon".chars() {
             engine.process_char(ch, &config);
         }
-        engine.process_char('w', &config); // luon + w -> luôn
         assert_eq!(engine.current_word, "luôn");
 
         // Gõ dấu phẩy: ngắt câu hoàn toàn
