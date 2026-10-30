@@ -187,8 +187,10 @@ fn to_wide_chars(s: &str) -> Vec<u16> {
 
 fn load_tray_icon(is_v: bool) -> HICON {
     let bytes = if is_v { V_ICON_BYTES_32 } else { E_ICON_BYTES_32 };
-    let size = 32;
+    create_hicon_from_bgra(bytes, 32)
+}
 
+pub fn create_hicon_from_bgra(bytes: &[u8], size: i32) -> HICON {
     unsafe {
         let hdc = GetDC(null_mut());
         let mut bmi: BITMAPINFO = std::mem::zeroed();
