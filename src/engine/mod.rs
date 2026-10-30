@@ -211,7 +211,9 @@ impl Engine {
                 self.has_transformed = true;
 
                 // Nếu auto_restore bật và từ mới tạo ra là âm tiết không hợp lệ trong tiếng Việt:
-                if config.auto_restore && !is_valid_vietnamese_syllable(&self.current_word) {
+                let chars: Vec<char> = self.current_word.chars().collect();
+                let vowel_indices = telex::extract_vowel_indices(&chars);
+                if config.auto_restore && !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&self.current_word) {
                     let bs = self.current_word.chars().count();
                     let text = self.raw_keys.clone();
                     self.reset();
@@ -282,10 +284,16 @@ impl Engine {
 
         // 6. Nếu không có biến đổi:
         // Nếu đã từng biến đổi (ví dụ "tá") và phím c này ("k") làm từ thành không hợp lệ ("ták"):
+        // QUY TẮC CỐT LÕI: Chỉ kích hoạt Auto-Restore khi từ ĐÃ CÓ NGUYÊN ÂM (đã hình thành vần âm tiết).
+        // Nếu từ chưa có nguyên âm nào (ví dụ: đt, đc, đk, đz, đm, đcl... và mọi kiểu viết tắt / teencode sáng tạo tự do),
+        // bộ gõ tuyệt đối KHÔNG rollback, tôn trọng 100% mọi phong cách viết tắt không giới hạn của người dùng!
         if config.auto_restore && self.has_transformed {
             let mut test_word = self.current_word.clone();
             test_word.push(c);
-            if !is_valid_vietnamese_syllable(&test_word) && !is_valid_abbreviation(&test_word) {
+            let chars: Vec<char> = test_word.chars().collect();
+            let vowel_indices = telex::extract_vowel_indices(&chars);
+
+            if !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&test_word) {
                 let backspaces = self.current_word.chars().count();
                 let text = self.raw_keys.clone();
                 self.reset();
@@ -309,27 +317,6 @@ impl Engine {
         self.current_word.push(c);
         KeyAction::PassThrough
     }
-}
-
-/// Kiểm tra từ có phải là từ viết tắt tiếng Việt hợp lệ hay không (ví dụ: đt, đc, đk, đh, đb, đr, đx, đng...)
-/// Trong tiếng Việt, người dùng rất hay viết tắt bằng các chữ cái phụ âm có chữ 'đ'.
-/// Những từ này không có nguyên âm và gồm toàn các phụ âm tiếng Việt, do đó auto_restore tuyệt đối không được đá về "dd...".
-pub fn is_valid_abbreviation(word: &str) -> bool {
-    let chars: Vec<char> = word.chars().collect();
-    if chars.is_empty() {
-        return false;
-    }
-    // Không chứa nguyên âm
-    if !telex::extract_vowel_indices(&chars).is_empty() {
-        return false;
-    }
-    // Phải có chữ 'đ' hoặc 'Đ'
-    let has_d = chars.iter().any(|&c| c == 'đ' || c == 'Đ');
-    if !has_d {
-        return false;
-    }
-    // Mọi ký tự trong từ đều phải là phụ âm tiếng Việt hợp lệ
-    chars.iter().all(|&c| c == 'đ' || c == 'Đ' || vietnamese::is_consonant(c))
 }
 
 /// Kiểm tra một từ có phải là âm tiết tiếng Việt hợp lệ theo cấu trúc ngữ âm học hay không.
@@ -964,5 +951,21 @@ mod tests {
         let a_k = engine.process_char('k', &config);
         assert_eq!(a_k, KeyAction::PassThrough);
         assert_eq!(engine.current_word, "đk");
+
+        // 4. Viết tắt sáng tạo tự do "đz" (đẹp zai / trai) không bị đá về "ddz"
+        engine.reset();
+        engine.process_char('d', &config);
+        engine.process_char('d', &config);
+        let a_z = engine.process_char('z', &config);
+        assert_eq!(a_z, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "đz");
+
+        // 5. Viết tắt sáng tạo tự do "đm", "đcl" không bị đá về "dd..."
+        engine.reset();
+        engine.process_char('d', &config);
+        engine.process_char('d', &config);
+        let a_m = engine.process_char('m', &config);
+        assert_eq!(a_m, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "đm");
     }
 }
