@@ -3,7 +3,7 @@ pub mod vietnamese;
 pub mod vni;
 
 use crate::config::{Config, InputMethod, SwitchKey};
-use crate::engine::vietnamese::{decompose_vietnamese_char, Tone, VowelMod};
+use crate::engine::vietnamese::{decompose_vietnamese_char, Tone};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum KeyAction {
@@ -337,50 +337,28 @@ pub fn is_valid_vietnamese_syllable(word: &str) -> bool {
     // 2. Trích xuất vị trí nguyên âm
     let vowel_indices = telex::extract_vowel_indices(&chars);
     if vowel_indices.is_empty() {
-        let s: String = chars.iter().map(|c| c.to_ascii_lowercase()).collect();
-        return is_valid_initial_consonant_prefix(&s);
+        // Từ không chứa nguyên âm (từ viết tắt, ký hiệu thuần phụ âm):
+        // Không đoán từ, luôn chấp nhận để người dùng tự do viết tắt không giới hạn.
+        return true;
     }
 
-    // Các nguyên âm trong 1 âm tiết tiếng Việt bắt buộc phải nằm liền kề nhau:
+    // Các nguyên âm trong 1 âm tiết tiếng Việt bắt buộc phải nằm liền kề nhau
+    // (nếu bị phụ âm chêm vào giữa như vi-de-o, re-set thì là từ đa âm tiết ngoại lai):
     for i in 1..vowel_indices.len() {
         if vowel_indices[i] != vowel_indices[i - 1] + 1 {
             return false;
         }
     }
 
-    // Tối đa 3 nguyên âm trong 1 từ tiếng Việt (ví dụ: oai, uôi, yêu, nghiêng)
+    // Tối đa 3 nguyên âm trong 1 âm tiết tiếng Việt:
     if vowel_indices.len() > 3 {
-        return false;
-    }
-
-    // Kiểm tra cấu trúc cụm nguyên âm (vowel cluster) có hợp lệ không:
-    let cluster: String = vowel_indices
-        .iter()
-        .map(|&idx| {
-            if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
-                match (base, vmod) {
-                    ('a', VowelMod::Hat) => 'â',
-                    ('a', VowelMod::Breve) => 'ă',
-                    ('e', VowelMod::Hat) => 'ê',
-                    ('o', VowelMod::Hat) => 'ô',
-                    ('o', VowelMod::Horn) => 'ơ',
-                    ('u', VowelMod::Horn) => 'ư',
-                    (b, _) => b,
-                }
-            } else {
-                chars[idx].to_ascii_lowercase()
-            }
-        })
-        .collect();
-
-    if !is_valid_vowel_cluster(&cluster) {
         return false;
     }
 
     let first_vowel = vowel_indices[0];
     let last_vowel = *vowel_indices.last().unwrap();
 
-    // 3. Kiểm tra phụ âm đầu
+    // 3. Kiểm tra phụ âm đầu theo bảng chữ cái ngữ âm tiếng Việt
     let initial: String = chars[..first_vowel]
         .iter()
         .map(|c| c.to_ascii_lowercase())
@@ -389,7 +367,7 @@ pub fn is_valid_vietnamese_syllable(word: &str) -> bool {
         return false;
     }
 
-    // 4. Kiểm tra phụ âm cuối
+    // 4. Kiểm tra phụ âm cuối theo bảng chữ cái ngữ âm tiếng Việt
     let final_consonants: String = chars[last_vowel + 1..]
         .iter()
         .map(|c| c.to_ascii_lowercase())
@@ -412,30 +390,6 @@ pub fn is_valid_vietnamese_syllable(word: &str) -> bool {
     }
 
     true
-}
-
-fn is_valid_vowel_cluster(cluster: &str) -> bool {
-    matches!(
-        cluster,
-        // Đơn âm (12 nguyên âm đơn tiếng Việt)
-        "a" | "ă" | "â" | "e" | "ê" | "i" | "y" | "o" | "ô" | "ơ" | "u" | "ư"
-        // Nhị trùng âm (Diphthongs) & các dạng thô khi đang gõ
-        | "ia" | "iê" | "ie" | "ya" | "yê" | "ye"
-        | "ua" | "uô" | "uo" | "ưa" | "ươ"
-        | "ai" | "ao" | "au" | "ay" | "âu" | "ây"
-        | "eo" | "êu"
-        | "iu"
-        | "oi" | "ôi" | "ơi"
-        | "ui" | "uy" | "uơ" | "uâ" | "ưi" | "ưu"
-        | "oa" | "oă" | "oe" | "oo"
-        // Tam trùng âm (Triphthongs) & các dạng thô khi đang gõ (uây, ươu, uôi, ươi, iêu, yêu...)
-        | "iêu" | "ieu" | "yêu" | "yeu"
-        | "oai" | "oay" | "oao" | "oeo"
-        | "uôi" | "uoi" | "ươi"
-        | "ươu" | "uou"
-        | "uây" | "uay"
-        | "uya" | "uyê" | "uye" | "uyu"
-    )
 }
 
 fn is_valid_initial_consonant(s: &str) -> bool {
@@ -468,40 +422,6 @@ fn is_valid_initial_consonant(s: &str) -> bool {
             | "th"
             | "tr"
             | "ngh"
-    )
-}
-
-fn is_valid_initial_consonant_prefix(s: &str) -> bool {
-    matches!(
-        s,
-        "" | "b"
-            | "c"
-            | "d"
-            | "đ"
-            | "g"
-            | "h"
-            | "k"
-            | "l"
-            | "m"
-            | "n"
-            | "p"
-            | "r"
-            | "s"
-            | "t"
-            | "v"
-            | "x"
-            | "ch"
-            | "gh"
-            | "gi"
-            | "kh"
-            | "nh"
-            | "ng"
-            | "ngh"
-            | "ph"
-            | "q"
-            | "qu"
-            | "th"
-            | "tr"
     )
 }
 
@@ -999,5 +919,17 @@ mod tests {
             engine.process_char(ch, &config);
         }
         assert_eq!(engine.current_word, "chuối");
+    }
+
+    #[test]
+    fn test_no_guesswork_free_vowels() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ từ mượn / tự do không bị bộ gõ tự ý phán đoán hoặc rollback
+        for ch in "cacao".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "cacao");
     }
 }
