@@ -28,6 +28,8 @@ pub struct Config {
     pub smart_english: bool,
     /// Tự động điều chỉnh dấu thanh khi sửa nguyên âm trong từ (khí -> khái)
     pub modify_tone_in_word: bool,
+    /// Khởi động cùng Windows khi đăng nhập máy tính
+    pub start_with_windows: bool,
 }
 
 impl Default for Config {
@@ -41,6 +43,7 @@ impl Default for Config {
             free_marking: true,
             smart_english: true,
             modify_tone_in_word: true,
+            start_with_windows: false,
         }
     }
 }

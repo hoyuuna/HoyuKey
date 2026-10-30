@@ -6,6 +6,7 @@ mod hook;
 mod tray;
 mod ui;
 pub mod updater;
+pub mod autostart;
 
 use std::ptr::null_mut;
 use std::sync::{LazyLock, Mutex};
@@ -32,8 +33,10 @@ pub struct AppState {
 }
 
 pub static GLOBAL_STATE: LazyLock<Mutex<AppState>> = LazyLock::new(|| {
+    let mut config = Config::default();
+    config.start_with_windows = autostart::is_autostart_enabled();
     Mutex::new(AppState {
-        config: Config::default(),
+        config,
         engine: Engine::new(),
         main_hwnd: 0,
     })

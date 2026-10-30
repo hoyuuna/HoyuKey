@@ -39,6 +39,7 @@ static MODIFY_TONE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
+static START_WITH_WINDOWS_PROGRESS: AtomicU32 = AtomicU32::new(0);
 
 // Quản lý trang và hiệu ứng chuyển trang (Smooth Page Transition Animation)
 static CURRENT_PAGE: AtomicU8 = AtomicU8::new(0);
@@ -209,7 +210,8 @@ pub fn create_settings_window(hinstance: HMODULE) -> HWND {
 pub fn show_settings_window() {
     let hwnd = SETTINGS_HWND.load(Ordering::SeqCst) as HWND;
     if hwnd != null_mut() {
-        let state = GLOBAL_STATE.lock().unwrap();
+        let mut state = GLOBAL_STATE.lock().unwrap();
+        state.config.start_with_windows = crate::autostart::is_autostart_enabled();
         MODERN_TONE_PROGRESS.store(if state.config.modern_tone { 1000 } else { 0 }, Ordering::SeqCst);
         FREE_MARKING_PROGRESS.store(if state.config.free_marking { 1000 } else { 0 }, Ordering::SeqCst);
         SMART_ENGLISH_PROGRESS.store(if state.config.smart_english { 1000 } else { 0 }, Ordering::SeqCst);
@@ -217,6 +219,7 @@ pub fn show_settings_window() {
         AUTO_RESTORE_PROGRESS.store(if state.config.auto_restore { 1000 } else { 0 }, Ordering::SeqCst);
         INPUT_METHOD_PROGRESS.store(if state.config.input_method == InputMethod::Vni { 1000 } else { 0 }, Ordering::SeqCst);
         SWITCH_KEY_PROGRESS.store(if state.config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, Ordering::SeqCst);
+        START_WITH_WINDOWS_PROGRESS.store(if state.config.start_with_windows { 1000 } else { 0 }, Ordering::SeqCst);
         HOVER_ITEM.store(-1, Ordering::SeqCst);
         drop(state);
 
@@ -404,6 +407,17 @@ unsafe extern "system" fn settings_wnd_proc(
                     SWITCH_KEY_PROGRESS.store(next, Ordering::SeqCst);
                 }
 
+                // 5b. Start with Windows Switch animation
+                let target_autostart = if config.start_with_windows { 1000 } else { 0 };
+                let curr_autostart = START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst);
+                if curr_autostart != target_autostart {
+                    still_animating = true;
+                    let diff = (target_autostart as i32 - curr_autostart as i32) / 3;
+                    let step = if diff == 0 { if target_autostart > curr_autostart { 1 } else { -1 } } else { diff };
+                    let next = (curr_autostart as i32 + step).clamp(0, 1000) as u32;
+                    START_WITH_WINDOWS_PROGRESS.store(next, Ordering::SeqCst);
+                }
+
                 // 6. Modal Popup Pop-out Animation
                 let modal_state = crate::updater::MODAL_STATE.load(Ordering::SeqCst);
                 if modal_state > 0 {
@@ -571,6 +585,9 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             if x >= sw_tab_x && x <= sw_tab_x + sw_total_w && y >= 152 && y <= 196 {
                 return 46;
             }
+            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 238 && y <= 282 {
+                return 47;
+            }
         } else if page == 3 {
             // Giới thiệu: Nút Kiểm tra cập nhật
             let btn_update_w = 240;
@@ -726,6 +743,11 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                         changed = true;
                     }
                 }
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 238 && y <= 282 {
+                let new_val = !state.config.start_with_windows;
+                state.config.start_with_windows = new_val;
+                crate::autostart::set_autostart(new_val);
+                changed = true;
             }
         } else if page == 3 {
             // Nút Kiểm tra cập nhật
@@ -1255,7 +1277,8 @@ unsafe fn render_page_elements(
             gdiplus_draw_rounded_card(graphics, card_x, 222, card_w, 84, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
             draw_gdip_text(graphics, font_bold, "Khởi động cùng Windows", left_text, 239, ARGB_TEXT_PRIMARY, false);
             draw_gdip_text(graphics, font_desc, "Tự động chạy HoyuKey khi đăng nhập máy tính", left_text, 265, ARGB_TEXT_MUTED, false);
-            draw_animated_switch(graphics, right_ctrl - 50, 246, 1.0);
+            let autostart_progress = START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, 246, autostart_progress);
 
         } else if page == 3 {
             // --- Trang Giới thiệu (Tối giản: Logo, Tên, Phiên bản, Nút Kiểm tra, Changelog) ---
@@ -1286,7 +1309,7 @@ unsafe fn render_page_elements(
             let cl_y = 316;
             let cl_h = 244;
             gdiplus_draw_rounded_card(graphics, card_x, cl_y, card_w, cl_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-            draw_gdip_text(graphics, font_section, "NHẬT KÝ THAY ĐỔI (CHANGELOG)", left_text, cl_y + 16, ARGB_STATUS_MUTED, false);
+            draw_gdip_text(graphics, font_section, "NHẬT KÝ THAY ĐỔI", left_text, cl_y + 16, ARGB_STATUS_MUTED, false);
 
             let raw_changelog = crate::updater::CHANGELOG_BODY.lock().unwrap().clone();
             let changelog_text = if raw_changelog.is_empty() {

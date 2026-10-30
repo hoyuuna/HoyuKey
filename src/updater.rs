@@ -47,7 +47,7 @@ pub fn ensure_changelog_loaded(hwnd: HWND) {
             }
             Err(_) => {
                 *CHANGELOG_BODY.lock().unwrap() =
-                    "• Chưa thể tải nhật ký từ GitHub (Repo đang ở chế độ Private hoặc offline).\n• Bản phát hành chính thức sẽ tự động đồng bộ từ GitHub Releases.".to_string();
+                    "• Chưa thể tải nhật ký cập nhật do chưa có kết nối mạng.\n• Nhật ký sẽ tự động hiển thị khi có kết nối.".to_string();
             }
         }
         IS_FETCHING_CHANGELOG.store(false, Ordering::SeqCst);
