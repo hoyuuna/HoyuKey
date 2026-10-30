@@ -38,48 +38,15 @@ impl Engine {
         self.last_word_before_space = None;
     }
 
-    /// Xử lý phím Backspace thông minh:
-    /// 1. Nếu buffer từ hiện tại rỗng nhưng có từ vừa nhập trước đó (người dùng vừa gõ xong từ rồi gõ space),
-    ///    lùi lại sẽ khôi phục ngay từ trước đó để người dùng sửa dấu/ký tự liền mạch.
-    /// 2. Nếu từ hiện tại đang có dấu thanh (ví dụ "quảng" hoặc "dụ"), Backspace sẽ gỡ bỏ dấu thanh trước (trở về "quang", "du")
-    ///    để người dùng có thể gõ ngay phím dấu khác (như 'x' thành "quãng", "dũ") như trên bàn phím điện thoại!
+    /// Xử lý phím Backspace:
+    /// Đồng bộ xóa ký tự trong bộ đệm và cho phím Backspace vật lý đi qua tự nhiên.
+    /// Nếu vừa gõ xong từ rồi gõ space (ví dụ "dụ "), ấn Backspace xóa space sẽ khôi phục từ để có thể gõ tiếp.
     pub fn handle_backspace(&mut self) -> Option<KeyAction> {
-        // Nếu từ hiện tại rỗng, kiểm tra xem có từ vừa kết thúc bằng space không
         if self.current_word.is_empty() {
             if let Some(word) = self.last_word_before_space.take() {
                 self.current_word = word;
             }
             return None;
-        }
-
-        let mut has_tone = false;
-        for c in self.current_word.chars() {
-            if let Some((_, _, tone, _)) = vietnamese::decompose_vietnamese_char(c) {
-                if tone != Tone::None {
-                    has_tone = true;
-                    break;
-                }
-            }
-        }
-
-        if has_tone {
-            let old_len = self.current_word.chars().count();
-            let mut new_chars: Vec<char> = Vec::new();
-            for c in self.current_word.chars() {
-                if let Some((base, vmod, _, is_upper)) = vietnamese::decompose_vietnamese_char(c) {
-                    let unaccented = vietnamese::get_vietnamese_vowel(base, vmod, Tone::None).unwrap_or(c);
-                    new_chars.push(if is_upper { unaccented.to_uppercase().next().unwrap_or(unaccented) } else { unaccented });
-                } else {
-                    new_chars.push(c);
-                }
-            }
-            let new_word: String = new_chars.into_iter().collect();
-            self.current_word = new_word.clone();
-
-            return Some(KeyAction::Transform {
-                backspaces: old_len,
-                text: new_word,
-            });
         }
 
         self.current_word.pop();
@@ -93,8 +60,8 @@ impl Engine {
             return KeyAction::PassThrough;
         }
 
-        // Nếu là phím khoảng trắng, ngắt dòng hoặc ký tự phân cách từ
-        if c.is_whitespace() || is_word_boundary(c) {
+        // 1. Phím khoảng trắng (Space / Tab): ngắt từ và tạm lưu từ vừa gõ phòng khi cần sửa ngay
+        if c.is_whitespace() {
             if !self.current_word.is_empty() {
                 self.last_word_before_space = Some(self.current_word.clone());
                 self.current_word.clear();
@@ -102,7 +69,14 @@ impl Engine {
             return KeyAction::PassThrough;
         }
 
-        // Bắt đầu một từ mới hoặc gõ tiếp: hủy last_word_before_space để tránh nhiễm từ cũ
+        // 2. Dấu câu / phân cách câu (phẩy, chấm, hai chấm, ngoặc...):
+        // Kết thúc cụm từ hoàn toàn, reset sạch buffer để không bao giờ bị nhảy nhầm chữ ("luôn, " không bị thành "luoon")
+        if is_word_boundary(c) {
+            self.reset();
+            return KeyAction::PassThrough;
+        }
+
+        // Bắt đầu một từ mới: xóa lịch sử từ cũ
         if self.current_word.is_empty() {
             self.last_word_before_space = None;
         }
@@ -235,26 +209,40 @@ mod tests {
         }
         assert_eq!(engine.current_word, "quảng");
 
-        // Backspace -> tự động gỡ dấu hỏi, đưa từ về "quang"
+        // Backspace -> đồng bộ xóa ký tự 'g', không tự tiện biến đổi từ
         let bs_action = engine.handle_backspace();
-        assert_eq!(
-            bs_action,
-            Some(KeyAction::Transform {
-                backspaces: 5,
-                text: "quang".to_string(),
-            })
-        );
-        assert_eq!(engine.current_word, "quang");
+        assert_eq!(bs_action, None);
+        assert_eq!(engine.current_word, "quản");
+    }
 
-        // Gõ 'x' -> ngay lập tức thành "quãng"
-        let action = engine.process_char('x', &config);
-        assert_eq!(
-            action,
-            KeyAction::Transform {
-                backspaces: 5,
-                text: "quãng".to_string(),
-            }
-        );
+    #[test]
+    fn test_telex_luon_comma_backspace() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "luôn, "
+        for ch in "luon".chars() {
+            engine.process_char(ch, &config);
+        }
+        engine.process_char('w', &config); // luon + w -> luôn
+        assert_eq!(engine.current_word, "luôn");
+
+        // Gõ dấu phẩy: ngắt câu hoàn toàn
+        engine.process_char(',', &config);
+        assert_eq!(engine.current_word, "");
+        assert_eq!(engine.last_word_before_space, None);
+
+        // Gõ space:
+        engine.process_char(' ', &config);
+        assert_eq!(engine.current_word, "");
+        assert_eq!(engine.last_word_before_space, None);
+
+        // Xóa space và xóa phẩy: không bị can thiệp biến đổi thành "luoon"
+        let bs1 = engine.handle_backspace();
+        assert_eq!(bs1, None);
+        let bs2 = engine.handle_backspace();
+        assert_eq!(bs2, None);
+        assert_eq!(engine.current_word, "");
     }
 
     #[test]

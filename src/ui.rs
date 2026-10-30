@@ -445,6 +445,13 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             if x >= sw_tab_x && x <= right_ctrl && y >= 105 && y <= 145 {
                 return 43;
             }
+        } else if page == 3 {
+            // Giới thiệu: Nút Kiểm tra cập nhật
+            let btn_update_w = 240;
+            let btn_update_x = card_x + (card_w - btn_update_w) / 2;
+            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y >= 286 && y <= 330 {
+                return 25;
+            }
         }
     }
 
@@ -563,6 +570,15 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                     }
                 }
             }
+        } else if page == 3 {
+            // Nút Kiểm tra cập nhật
+            let btn_update_w = 240;
+            let btn_update_x = card_x + (card_w - btn_update_w) / 2;
+            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y >= 286 && y <= 330 {
+                drop(state);
+                crate::updater::check_for_updates_interactive(hwnd);
+                return;
+            }
         }
 
         if changed {
@@ -669,6 +685,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
             font_desc,
             font_section,
             font_tab,
+            font_btn,
         );
     } else {
         // Trạng thái trượt animation 60 FPS:
@@ -693,6 +710,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 font_desc,
                 font_section,
                 font_tab,
+                font_btn,
             );
 
             render_page_elements(
@@ -711,6 +729,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 font_desc,
                 font_section,
                 font_tab,
+                font_btn,
             );
         } else {
             // Back về home: Trang hiện tại trượt sang phải, trang chủ trượt vào từ bên trái
@@ -733,6 +752,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 font_desc,
                 font_section,
                 font_tab,
+                font_btn,
             );
 
             render_page_elements(
@@ -751,6 +771,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 font_desc,
                 font_section,
                 font_tab,
+                font_btn,
             );
         }
     }
@@ -804,6 +825,7 @@ unsafe fn render_page_elements(
     font_desc: *mut GpFont,
     font_section: *mut GpFont,
     font_tab: *mut GpFont,
+    font_btn: *mut GpFont,
 ) {
     let card_x = (base_card_x as f32 + offset_x).round() as i32;
     let right_ctrl = (base_right_ctrl as f32 + offset_x).round() as i32;
@@ -959,24 +981,29 @@ unsafe fn render_page_elements(
             draw_animated_switch(graphics, right_ctrl - 50, 212, 1.0);
 
         } else if page == 3 {
-            // --- Trang Giới thiệu ---
+            // --- Trang Giới thiệu (Tối giản: Logo, Tên, Số phiên bản, Nút Kiểm tra cập nhật) ---
             draw_gdip_text(graphics, font_sub_title, "Giới thiệu", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
 
-            // Card thông tin
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 360, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            // Card thông tin tinh tế (cao 290px)
+            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 290, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             let center_x = card_x + card_w / 2;
             gdiplus_draw_image(graphics, center_x - 32, 114, 64, 64, LOGO_BGRA_128, 128, 128);
 
-            draw_gdip_text_centered(graphics, font_title, "HoyuKey", card_x, 190, card_w, 30, ARGB_TEXT_PRIMARY);
-            draw_gdip_text_centered(graphics, font_desc, "Phiên bản: 0.1 (Tự động cập nhật)", card_x, 222, card_w, 24, ARGB_TEXT_MUTED);
+            draw_gdip_text_centered(graphics, font_title, "HoyuKey", card_x, 192, card_w, 32, ARGB_TEXT_PRIMARY);
 
-            gdiplus_draw_line(graphics, left_text + 40, 260, right_ctrl - 40, 260, ARGB_DIVIDER, 1.0);
+            let ver_text = format!("Phiên bản: v{}", crate::updater::CURRENT_VERSION);
+            draw_gdip_text_centered(graphics, font_desc, &ver_text, card_x, 228, card_w, 24, ARGB_TEXT_MUTED);
 
-            draw_gdip_text_centered(graphics, font_bold, "Tác giả: Hoyuuna", card_x, 276, card_w, 26, ARGB_TEXT_PRIMARY);
-            draw_gdip_text_centered(graphics, font_desc, "Bộ gõ Tiếng Việt thế hệ mới cho PC viết bằng Rust.", card_x, 304, card_w, 24, ARGB_TEXT_MUTED);
-            draw_gdip_text_centered(graphics, font_desc, "Hiệu năng cao, bảo mật tuyệt đối, mã nguồn mở.", card_x, 328, card_w, 24, ARGB_TEXT_MUTED);
-            draw_gdip_text_centered(graphics, font_bold, "https://github.com/hoyuuna/HoyuKey", card_x, 368, card_w, 26, 0xFF60A5FA);
+            // Nút "Kiểm tra cập nhật" hiện đại
+            let btn_update_w = 240;
+            let btn_update_x = card_x + (card_w - btn_update_w) / 2;
+            let btn_update_y = 286;
+            let btn_update_h = 44;
+
+            let update_btn_bg = if hover_id == 25 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
+            gdiplus_draw_rounded_card(graphics, btn_update_x, btn_update_y, btn_update_w, btn_update_h, 8, update_btn_bg, ARGB_WHITE, 1.0);
+            draw_gdip_text_centered(graphics, font_btn, "Kiểm tra cập nhật", btn_update_x, btn_update_y, btn_update_w, btn_update_h, ARGB_TEXT_DARK);
         }
     }
 }

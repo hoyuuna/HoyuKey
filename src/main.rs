@@ -5,6 +5,7 @@ mod engine;
 mod hook;
 mod tray;
 mod ui;
+pub mod updater;
 
 use std::ptr::null_mut;
 use std::sync::{LazyLock, Mutex};

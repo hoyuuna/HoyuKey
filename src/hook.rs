@@ -2,7 +2,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardState, MapVirtualKeyW, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD,
+    GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD,
     KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK, VK_CONTROL, VK_DOWN, VK_END,
     VK_ESCAPE, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT,
     VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
@@ -236,6 +236,25 @@ fn reset_engine() {
 
 fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
     unsafe {
+        // 1. Phím chữ cái A-Z (chiếm 99% khi gõ tiếng Việt):
+        // Xử lý trực tiếp từ Virtual Key mà KHÔNG gọi ToUnicode làm hỏng dead-key state của Windows/Chrome!
+        if (0x41..=0x5A).contains(&vk) {
+            let shift = (GetKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0;
+            let caps = (GetKeyState(0x14) as u16 & 0x0001) != 0; // VK_CAPITAL = 0x14
+            let upper = shift ^ caps;
+            let ch = ((vk as u8 - b'A') + if upper { b'A' } else { b'a' }) as char;
+            return Some(ch);
+        }
+
+        // 2. Phím số 0-9 khi không giữ Shift:
+        if (0x30..=0x39).contains(&vk) {
+            let shift = (GetKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0;
+            if !shift {
+                return Some((vk as u8) as char);
+            }
+        }
+
+        // 3. Các phím ký tự khác (dấu câu, ký hiệu đặc biệt):
         let mut key_state = [0u8; 256];
         GetKeyboardState(key_state.as_mut_ptr());
 
@@ -246,7 +265,7 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
             key_state.as_ptr(),
             utf16_buf.as_mut_ptr(),
             utf16_buf.len() as i32,
-            0,
+            4, // wFlags = 4: không làm thay đổi trạng thái bàn phím hệ thống
         );
 
         if len > 0 {
@@ -260,66 +279,40 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
 }
 
 /// Gửi chuỗi Backspace và Unicode Text nguyên tử (Atomic SendInput).
-/// Sử dụng kỹ thuật Zero-Width Space (U+200B) đệm để phá vỡ vùng chọn gợi ý (inline autocomplete selection)
-/// của Google Chrome / Chromium / Edge / Excel, xóa dứt điểm lỗi `ar` -> `aả`, `dd` -> `dđ`, `oo` -> `oô`!
+/// Gửi chuẩn Win32 API tương thích hoàn hảo với mọi ứng dụng, trình duyệt Chrome, Edge, Firefox, Word, Excel.
 unsafe fn send_transform_batch(backspaces: usize, text: &str) {
-    let backspace_scan = MapVirtualKeyW(VK_BACK as u32, 0) as u16;
-    let mut inputs = Vec::new();
-
-    if backspaces > 0 {
-        // 1. Gửi ký tự Zero-Width Space (U+200B) đệm:
-        // Nếu trình duyệt đang có vùng bôi đen gợi ý (Omnibox, Search box), ký tự này sẽ thế chỗ và ngắt ngay selection!
-        const ZWS_CHAR: u16 = 0x200B;
-        let mut zws_down: INPUT = std::mem::zeroed();
-        zws_down.r#type = INPUT_KEYBOARD;
-        zws_down.Anonymous.ki = KEYBDINPUT {
-            wVk: 0,
-            wScan: ZWS_CHAR,
-            dwFlags: KEYEVENTF_UNICODE,
-            time: 0,
-            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
-        };
-        inputs.push(zws_down);
-
-        let mut zws_up: INPUT = std::mem::zeroed();
-        zws_up.r#type = INPUT_KEYBOARD;
-        zws_up.Anonymous.ki = KEYBDINPUT {
-            wVk: 0,
-            wScan: ZWS_CHAR,
-            dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
-            time: 0,
-            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
-        };
-        inputs.push(zws_up);
-
-        // 2. Gửi (backspaces + 1) phím Backspace:
-        // Phím đầu tiên xóa ZWS, các phím sau xóa sạch các ký tự gốc cần biến đổi
-        for _ in 0..=backspaces {
-            let mut down: INPUT = std::mem::zeroed();
-            down.r#type = INPUT_KEYBOARD;
-            down.Anonymous.ki = KEYBDINPUT {
-                wVk: VK_BACK,
-                wScan: backspace_scan,
-                dwFlags: 0,
-                time: 0,
-                dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
-            };
-            inputs.push(down);
-
-            let mut up: INPUT = std::mem::zeroed();
-            up.r#type = INPUT_KEYBOARD;
-            up.Anonymous.ki = KEYBDINPUT {
-                wVk: VK_BACK,
-                wScan: backspace_scan,
-                dwFlags: KEYEVENTF_KEYUP,
-                time: 0,
-                dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
-            };
-            inputs.push(up);
-        }
+    if backspaces == 0 && text.is_empty() {
+        return;
     }
 
-    // 3. Bơm chuỗi Unicode tiếng Việt mới
+    let mut inputs = Vec::with_capacity(backspaces * 2 + text.encode_utf16().count() * 2);
+
+    // 1. Gửi chính xác số lượng phím Backspace cần xóa
+    for _ in 0..backspaces {
+        let mut down: INPUT = std::mem::zeroed();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT {
+            wVk: VK_BACK,
+            wScan: 0,
+            dwFlags: 0,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(down);
+
+        let mut up: INPUT = std::mem::zeroed();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT {
+            wVk: VK_BACK,
+            wScan: 0,
+            dwFlags: KEYEVENTF_KEYUP,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(up);
+    }
+
+    // 2. Bơm chuỗi Unicode tiếng Việt mới
     for c in text.encode_utf16() {
         let mut down: INPUT = std::mem::zeroed();
         down.r#type = INPUT_KEYBOARD;
