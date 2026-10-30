@@ -334,7 +334,7 @@ mod tests {
         }
         assert_eq!(engine.current_word, "");
 
-        // Gõ "aar" -> phải ra "ả" độc lập (chứ không bị dính thành "trcả")
+        // Gõ "aar" -> phải ra "ẩ" độc lập (chứ không bị dính thành "trcả")
         engine.process_char('a', &config);
         engine.process_char('a', &config);
         let action = engine.process_char('r', &config);
@@ -342,10 +342,10 @@ mod tests {
             action,
             KeyAction::Transform {
                 backspaces: 1,
-                text: "ả".to_string(),
+                text: "ẩ".to_string(),
             }
         );
-        assert_eq!(engine.current_word, "ả");
+        assert_eq!(engine.current_word, "ẩ");
     }
 
     #[test]
