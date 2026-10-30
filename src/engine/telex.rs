@@ -62,7 +62,7 @@ pub fn is_foreign_multisyllable_word(word: &str) -> bool {
     vowel_group_count > 1
 }
 
-/// Xử lý biến đổi 'd' <-> 'đ'
+/// Xử lý biến đổi 'd' <-> 'đ' thông minh và tự do ở mọi vị trí (ví dụ 'dặt' + 'd' -> 'đặt')
 fn handle_d_modifier(word: &str, is_upper: bool) -> Option<String> {
     let mut chars: Vec<char> = word.chars().collect();
     if chars.is_empty() {
@@ -72,16 +72,30 @@ fn handle_d_modifier(word: &str, is_upper: bool) -> Option<String> {
     let last_idx = chars.len() - 1;
     let last_char = chars[last_idx];
 
-    // 'đ' + 'd' -> 'dd' (hoàn tác)
+    // 1. 'đ' + 'd' -> 'dd' (hoàn tác ngay ký tự cuối)
     if last_char == 'đ' || last_char == 'Đ' {
         chars[last_idx] = if last_char == 'Đ' { 'D' } else { 'd' };
         chars.push(if is_upper { 'D' } else { 'd' });
         return Some(chars.into_iter().collect());
     }
 
-    // 'd' + 'd' -> 'đ' (chỉ khi ký tự trước đó là 'd')
+    // 2. 'd' + 'd' -> 'đ' (ngay ký tự cuối)
     if last_char == 'd' || last_char == 'D' {
         chars[last_idx] = if last_char == 'D' || is_upper { 'Đ' } else { 'đ' };
+        return Some(chars.into_iter().collect());
+    }
+
+    // 3. Tự do hóa phím 'd' trong toàn từ: nếu từ bắt đầu bằng 'd'/'D' hoặc có 'd'/'D' (ví dụ 'dặt' + 'd' -> 'đặt')
+    if let Some(pos) = chars.iter().position(|&c| c == 'd' || c == 'D') {
+        let is_d_upper = chars[pos] == 'D';
+        chars[pos] = if is_d_upper { 'Đ' } else { 'đ' };
+        return Some(chars.into_iter().collect());
+    }
+
+    // 4. Nếu từ đã có 'đ'/'Đ' và người dùng gõ thêm 'd' ở cuối từ -> hoàn tác 'đ' thành 'd' và chèn 'd' vào cuối
+    if let Some(pos) = chars.iter().position(|&c| c == 'đ' || c == 'Đ') {
+        chars[pos] = if chars[pos] == 'Đ' { 'D' } else { 'd' };
+        chars.push(if is_upper { 'D' } else { 'd' });
         return Some(chars.into_iter().collect());
     }
 

@@ -1,5 +1,5 @@
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, GetKeyboardState, MapVirtualKeyW, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD,
@@ -9,8 +9,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::config::SwitchKey;
@@ -23,8 +23,9 @@ pub const HOYU_MAGIC_EXTRA_INFO: usize = 0x484F5955; // 'HOYU'
 static KBD_HOOK_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
 static MOUSE_HOOK_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
 
-// Lưu phím vừa bị chặn KeyDown để chặn luôn KeyUp tương ứng, tránh desync phím trên trình duyệt
-static LAST_BLOCKED_VK: AtomicU16 = AtomicU16::new(0);
+// Theo dõi các phím bị chặn KeyDown để chặn luôn KeyUp tương ứng, tránh desync phím khi gõ nhanh trên trình duyệt
+const INIT_BOOL: AtomicBool = AtomicBool::new(false);
+static BLOCKED_VK: [AtomicBool; 256] = [INIT_BOOL; 256];
 
 // Theo dõi cửa sổ đang active (foreground), đổi cửa sổ -> tự động reset buffer
 static LAST_FOREGROUND_WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -115,10 +116,9 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
     // 3. Nếu là sự kiện KeyUp của phím mà KeyDown trước đó đã bị bộ gõ chặn:
     // Chặn luôn KeyUp này để trình duyệt (Chrome, Edge...) không bị desync trạng thái phím!
+    let vk_idx = (kbd.vkCode as usize) & 0xFF;
     if is_up {
-        let blocked_vk = LAST_BLOCKED_VK.load(Ordering::SeqCst);
-        if blocked_vk != 0 && blocked_vk == kbd.vkCode as u16 {
-            LAST_BLOCKED_VK.store(0, Ordering::SeqCst);
+        if BLOCKED_VK[vk_idx].swap(false, Ordering::SeqCst) {
             return 1;
         }
         return CallNextHookEx(null_mut(), code, wparam, lparam);
@@ -179,8 +179,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
         match action {
             KeyAction::Transform { backspaces, text } => {
                 // Ghi nhận phím này bị chặn để chặn luôn KeyUp của nó
-                LAST_BLOCKED_VK.store(kbd.vkCode as u16, Ordering::SeqCst);
-                // Gửi toàn bộ Backspace và chuỗi Unicode mới trong MỘT lượt SendInput duy nhất
+                BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
+                // Gửi Backspace và chuỗi Unicode mới
                 send_transform_batch(backspaces, &text);
                 return 1;
             }
@@ -259,40 +259,49 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
     }
 }
 
-/// Gửi nguyên tử (Atomic) toàn bộ chuỗi Backspace và Unicode Text trong 1 lần SendInput duy nhất.
-/// Thiết lập scan code chuẩn cho Backspace (0x0E) để mọi trình duyệt (Chrome, Edge...) nhận diện tức thì.
+/// Gửi chuỗi Backspace và Unicode Text.
+/// Tách nhịp 1ms sau Backspace giúp trình duyệt (Chrome, Edge...) xử lý xong DOM delete, tránh lỗi `aả`!
 unsafe fn send_transform_batch(backspaces: usize, text: &str) {
     let backspace_scan = MapVirtualKeyW(VK_BACK as u32, 0) as u16;
-    let mut inputs = Vec::with_capacity(backspaces * 2 + text.encode_utf16().count() * 2);
 
-    for _ in 0..backspaces {
-        // Backspace Down
-        let mut down: INPUT = std::mem::zeroed();
-        down.r#type = INPUT_KEYBOARD;
-        down.Anonymous.ki = KEYBDINPUT {
-            wVk: VK_BACK,
-            wScan: backspace_scan,
-            dwFlags: 0,
-            time: 0,
-            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
-        };
-        inputs.push(down);
+    if backspaces > 0 {
+        let mut bs_inputs = Vec::with_capacity(backspaces * 2);
+        for _ in 0..backspaces {
+            let mut down: INPUT = std::mem::zeroed();
+            down.r#type = INPUT_KEYBOARD;
+            down.Anonymous.ki = KEYBDINPUT {
+                wVk: VK_BACK,
+                wScan: backspace_scan,
+                dwFlags: 0,
+                time: 0,
+                dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+            };
+            bs_inputs.push(down);
 
-        // Backspace Up
-        let mut up: INPUT = std::mem::zeroed();
-        up.r#type = INPUT_KEYBOARD;
-        up.Anonymous.ki = KEYBDINPUT {
-            wVk: VK_BACK,
-            wScan: backspace_scan,
-            dwFlags: KEYEVENTF_KEYUP,
-            time: 0,
-            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
-        };
-        inputs.push(up);
+            let mut up: INPUT = std::mem::zeroed();
+            up.r#type = INPUT_KEYBOARD;
+            up.Anonymous.ki = KEYBDINPUT {
+                wVk: VK_BACK,
+                wScan: backspace_scan,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+            };
+            bs_inputs.push(up);
+        }
+
+        SendInput(
+            bs_inputs.len() as u32,
+            bs_inputs.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        );
+
+        // Nhịp nghỉ 1ms cho phép message loop của Chromium xử lý xong việc xóa ký tự cũ trong DOM
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
+    let mut uni_inputs = Vec::new();
     for c in text.encode_utf16() {
-        // Unicode Char Down
         let mut down: INPUT = std::mem::zeroed();
         down.r#type = INPUT_KEYBOARD;
         down.Anonymous.ki = KEYBDINPUT {
@@ -302,9 +311,8 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
-        inputs.push(down);
+        uni_inputs.push(down);
 
-        // Unicode Char Up
         let mut up: INPUT = std::mem::zeroed();
         up.r#type = INPUT_KEYBOARD;
         up.Anonymous.ki = KEYBDINPUT {
@@ -314,13 +322,13 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
-        inputs.push(up);
+        uni_inputs.push(up);
     }
 
-    if !inputs.is_empty() {
+    if !uni_inputs.is_empty() {
         SendInput(
-            inputs.len() as u32,
-            inputs.as_ptr(),
+            uni_inputs.len() as u32,
+            uni_inputs.as_ptr(),
             std::mem::size_of::<INPUT>() as i32,
         );
     }

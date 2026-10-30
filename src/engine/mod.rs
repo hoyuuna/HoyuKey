@@ -349,6 +349,29 @@ mod tests {
     }
 
     #[test]
+    fn test_telex_dat_d_to_dat() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "dawjt" -> "dặt"
+        for ch in "dawjt".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "dặt");
+
+        // Gõ 'd' ở cuối từ -> tự động biến 'd' đầu từ thành 'đ', ra "đặt"
+        let action = engine.process_char('d', &config);
+        assert_eq!(
+            action,
+            KeyAction::Transform {
+                backspaces: 3,
+                text: "đặt".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "đặt");
+    }
+
+    #[test]
     fn test_telex_foreign_animation() {
         let mut engine = Engine::new();
         let config = Config::default();
