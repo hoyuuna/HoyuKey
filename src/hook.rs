@@ -215,7 +215,7 @@ fn check_hotkey(vk: u16) -> bool {
 }
 
 pub fn toggle_vietnamese_mode() {
-    let (hwnd, _enabled) = {
+    let (hwnd, enabled) = {
         let mut state = GLOBAL_STATE.lock().unwrap();
         state.config.enabled = !state.config.enabled;
         state.engine.reset();
@@ -227,6 +227,8 @@ pub fn toggle_vietnamese_mode() {
             PostMessageW(hwnd as HWND, WM_APP_UPDATE_TRAY, 0, 0);
         }
     }
+
+    crate::ui::notify_mode_changed(enabled);
 }
 
 fn reset_engine() {

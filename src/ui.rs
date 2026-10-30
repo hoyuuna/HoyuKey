@@ -39,7 +39,11 @@ static MODIFY_TONE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
+const V_BGRA_32: &[u8] = include_bytes!("../icon/v_32.bin");
+const E_BGRA_32: &[u8] = include_bytes!("../icon/e_32.bin");
+
 static START_WITH_WINDOWS_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static MODE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 
 // Quản lý trang và hiệu ứng chuyển trang (Smooth Page Transition Animation)
 static CURRENT_PAGE: AtomicU8 = AtomicU8::new(0);
@@ -84,7 +88,7 @@ const ARGB_CARD_BORDER: u32 = 0xFF27272A;     // #27272a
 const ARGB_DIVIDER: u32 = 0xFF202024;         // #202024
 const ARGB_TEXT_PRIMARY: u32 = 0xFFF4F4F5;    // #f4f4f5
 const ARGB_TEXT_MUTED: u32 = 0xFFA1A1AA;      // #a1a1aa
-const ARGB_STATUS_GREEN: u32 = 0xFF22C55E;    // #22c55e
+const _ARGB_STATUS_GREEN: u32 = 0xFF22C55E;    // #22c55e
 const ARGB_STATUS_MUTED: u32 = 0xFF71717A;    // #71717a
 const ARGB_PILL_TRACK: u32 = 0xFF1C1C20;      // #1c1c20
 const ARGB_WHITE: u32 = 0xFFFAFAFA;           // #fafafa
@@ -220,6 +224,7 @@ pub fn show_settings_window() {
         INPUT_METHOD_PROGRESS.store(if state.config.input_method == InputMethod::Vni { 1000 } else { 0 }, Ordering::SeqCst);
         SWITCH_KEY_PROGRESS.store(if state.config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, Ordering::SeqCst);
         START_WITH_WINDOWS_PROGRESS.store(if state.config.start_with_windows { 1000 } else { 0 }, Ordering::SeqCst);
+        MODE_PROGRESS.store(if state.config.enabled { 1000 } else { 0 }, Ordering::SeqCst);
         HOVER_ITEM.store(-1, Ordering::SeqCst);
         drop(state);
 
@@ -227,6 +232,16 @@ pub fn show_settings_window() {
             ShowWindow(hwnd, SW_SHOW);
             ShowWindow(hwnd, SW_RESTORE);
             SetForegroundWindow(hwnd);
+            InvalidateRect(hwnd, null_mut(), 0);
+        }
+    }
+}
+
+pub fn notify_mode_changed(_enabled: bool) {
+    let hwnd = SETTINGS_HWND.load(Ordering::SeqCst) as HWND;
+    if hwnd != null_mut() {
+        unsafe {
+            SetTimer(hwnd, TIMER_ID_ANIM, 16, None);
             InvalidateRect(hwnd, null_mut(), 0);
         }
     }
@@ -328,6 +343,17 @@ unsafe extern "system" fn settings_wnd_proc(
                         let target = TARGET_PAGE.load(Ordering::SeqCst);
                         CURRENT_PAGE.store(target, Ordering::SeqCst);
                     }
+                }
+
+                // 1b. Mode Progress animation (0 = E, 1000 = V)
+                let target_mode = if config.enabled { 1000 } else { 0 };
+                let curr_mode = MODE_PROGRESS.load(Ordering::SeqCst);
+                if curr_mode != target_mode {
+                    still_animating = true;
+                    let diff = (target_mode as i32 - curr_mode as i32) / 3;
+                    let step = if diff == 0 { if target_mode > curr_mode { 1 } else { -1 } } else { diff };
+                    let next = (curr_mode as i32 + step).clamp(0, 1000) as u32;
+                    MODE_PROGRESS.store(next, Ordering::SeqCst);
                 }
 
                 // 2. Modern Tone Switch animation
@@ -1101,7 +1127,7 @@ unsafe fn render_page_elements(
     card_w: i32,
     base_right_ctrl: i32,
     base_left_text: i32,
-    config: &Config,
+    _config: &Config,
     hover_id: i32,
     font_title: *mut GpFont,
     font_sub_title: *mut GpFont,
@@ -1124,25 +1150,45 @@ unsafe fn render_page_elements(
         gdiplus_draw_image(graphics, card_x, 22, 48, 48, LOGO_BGRA_128, 128, 128);
         draw_gdip_text(graphics, font_title, "HoyuKey Dashboard", card_x + 60, 26, ARGB_TEXT_PRIMARY, false);
 
-        // 2. Card Trạng thái hệ thống (y = 86..162)
+        // 2. Card Trạng thái hệ thống (y = 86..162, cao 76px)
+        let mode_p = MODE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+        let mode_ease = 1.0 - (1.0 - mode_p).powi(3);
+
+        // Màu E: #70bbff (112, 187, 255), Màu V: #ffa9d2 (255, 169, 210)
+        let accent_r = (112.0 + (255.0 - 112.0) * mode_ease).round() as u32;
+        let accent_g = (187.0 + (169.0 - 187.0) * mode_ease).round() as u32;
+        let accent_b = (255.0 + (210.0 - 255.0) * mode_ease).round() as u32;
+        let accent_rgb = (accent_r << 16) | (accent_g << 8) | accent_b;
+
+        // Viền thẻ có ánh màu nhẹ theo trạng thái (tăng nhẹ khi hover)
+        let border_alpha = if hover_id == 10 { 0x55 } else { 0x33 };
+        let card_border = (border_alpha << 24) | accent_rgb;
         let status_bg = if hover_id == 10 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 76, 10, status_bg, ARGB_CARD_BORDER, 1.0);
 
-        let status_color = if config.enabled { ARGB_STATUS_GREEN } else { ARGB_STATUS_MUTED };
-        gdiplus_fill_ellipse(graphics, left_text as f32, 118.0, 12.0, 12.0, status_color);
+        // Vẽ thẻ nền bo góc
+        gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 76, 10, status_bg, card_border, 1.0);
 
-        let status_str = if config.enabled {
+        // Ánh sáng gradient hắt từ trái sang phải blend mượt mà vào nền tối của thẻ
+        let glow_alpha = if hover_id == 10 { 0x40 } else { 0x30 };
+        gdiplus_draw_card_glow(graphics, card_x, 86, card_w, 76, 10, accent_rgb, glow_alpha);
+
+        // Icon E và V ở vị trí bên trái (thay thế dấu chấm trước đây), hỗ trợ animation crossfade mượt mà
+        let icon_x = card_x + 18;
+        let icon_y = 106;
+        let icon_size = 36;
+
+        gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, E_BGRA_32, 32, 32, 1.0 - mode_ease);
+        gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, V_BGRA_32, 32, 32, mode_ease);
+
+        // Tiêu đề & mô tả trạng thái (đặt ngay bên phải icon)
+        let text_x = icon_x + icon_size + 16;
+        let status_str = if mode_ease >= 0.5 {
             "Tiếng Việt đang bật"
         } else {
             "Tiếng Việt đang tắt"
         };
-        draw_gdip_text(graphics, font_bold, status_str, left_text + 22, 102, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Bấm để đổi chế độ hoặc dùng phím tắt", left_text + 22, 126, ARGB_TEXT_MUTED, false);
-
-        let badge_bg = if config.enabled { 0xFF1C2C20 } else { 0xFF222227 };
-        let badge_text_color = if config.enabled { ARGB_STATUS_GREEN } else { ARGB_TEXT_MUTED };
-        gdiplus_draw_rounded_card(graphics, right_ctrl - 44, 104, 44, 40, 8, badge_bg, ARGB_CARD_BORDER, 1.0);
-        draw_gdip_text_centered(graphics, font_bold, if config.enabled { "V" } else { "E" }, right_ctrl - 44, 104, 44, 40, badge_text_color);
+        draw_gdip_text(graphics, font_bold, status_str, text_x, 102, ARGB_TEXT_PRIMARY, false);
+        draw_gdip_text(graphics, font_desc, "Bấm để đổi chế độ hoặc dùng phím tắt", text_x, 126, ARGB_TEXT_MUTED, false);
 
         // 3. Tiêu đề nhóm
         draw_gdip_text(graphics, font_section, "CÀI ĐẶT", card_x + 4, 175, ARGB_STATUS_MUTED, false);
@@ -1643,6 +1689,143 @@ unsafe fn gdiplus_draw_image(
         );
         GdipDisposeImage(bitmap as *mut GpImage);
     }
+}
+
+unsafe fn gdiplus_draw_image_alpha(
+    graphics: *mut GpGraphics,
+    dest_x: i32,
+    dest_y: i32,
+    dest_w: i32,
+    dest_h: i32,
+    bytes: &[u8],
+    src_w: i32,
+    src_h: i32,
+    alpha: f32,
+) {
+    if alpha <= 0.01 {
+        return;
+    }
+    const PIXEL_FORMAT_32BPP_PARGB: i32 = 0x000E200B;
+    let mut bitmap: *mut GpBitmap = null_mut();
+    GdipCreateBitmapFromScan0(
+        src_w,
+        src_h,
+        src_w * 4,
+        PIXEL_FORMAT_32BPP_PARGB,
+        bytes.as_ptr() as _,
+        &mut bitmap,
+    );
+    if bitmap.is_null() {
+        return;
+    }
+
+    if (alpha - 1.0).abs() < 0.01 {
+        GdipDrawImageRectRectI(
+            graphics,
+            bitmap as *mut GpImage,
+            dest_x,
+            dest_y,
+            dest_w,
+            dest_h,
+            0,
+            0,
+            src_w,
+            src_h,
+            UnitPixel,
+            null_mut(),
+            0,
+            null_mut(),
+        );
+    } else {
+        let mut image_attr: *mut GpImageAttributes = null_mut();
+        GdipCreateImageAttributes(&mut image_attr);
+
+        let mut cm: ColorMatrix = std::mem::zeroed();
+        cm.m[0] = 1.0;
+        cm.m[6] = 1.0;
+        cm.m[12] = 1.0;
+        cm.m[18] = alpha.clamp(0.0, 1.0);
+        cm.m[24] = 1.0;
+
+        GdipSetImageAttributesColorMatrix(
+            image_attr,
+            ColorAdjustTypeDefault,
+            1,
+            &cm,
+            null_mut(),
+            ColorMatrixFlagsDefault,
+        );
+
+        GdipDrawImageRectRectI(
+            graphics,
+            bitmap as *mut GpImage,
+            dest_x,
+            dest_y,
+            dest_w,
+            dest_h,
+            0,
+            0,
+            src_w,
+            src_h,
+            UnitPixel,
+            image_attr,
+            0,
+            null_mut(),
+        );
+
+        GdipDisposeImageAttributes(image_attr);
+    }
+
+    GdipDisposeImage(bitmap as *mut GpImage);
+}
+
+unsafe fn gdiplus_draw_card_glow(
+    graphics: *mut GpGraphics,
+    card_x: i32,
+    card_y: i32,
+    card_w: i32,
+    card_h: i32,
+    radius: i32,
+    color_rgb: u32,
+    alpha: u32,
+) {
+    if alpha == 0 {
+        return;
+    }
+    let card_path = create_rounded_path(card_x as f32, card_y as f32, card_w as f32, card_h as f32, radius as f32);
+
+    let mut state: u32 = 0;
+    GdipSaveGraphics(graphics, &mut state);
+    GdipSetClipPath(graphics, card_path, CombineModeIntersect);
+
+    let glow_w = 260;
+    let rect = Rect {
+        X: card_x,
+        Y: card_y,
+        Width: glow_w,
+        Height: card_h,
+    };
+
+    let start_color = (alpha << 24) | (color_rgb & 0x00FFFFFF);
+    let end_color = color_rgb & 0x00FFFFFF;
+
+    let mut line_brush: *mut GpLineGradient = null_mut();
+    GdipCreateLineBrushFromRectI(
+        &rect,
+        start_color,
+        end_color,
+        LinearGradientModeHorizontal,
+        WrapModeClamp,
+        &mut line_brush,
+    );
+
+    if !line_brush.is_null() {
+        GdipFillRectangleI(graphics, line_brush as *mut GpBrush, card_x, card_y, glow_w, card_h);
+        GdipDeleteBrush(line_brush as *mut GpBrush);
+    }
+
+    GdipRestoreGraphics(graphics, state);
+    GdipDeletePath(card_path);
 }
 
 unsafe fn create_gdip_font(family: *mut GpFontFamily, size: f32, style: i32) -> *mut GpFont {

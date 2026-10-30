@@ -191,6 +191,7 @@ unsafe extern "system" fn tray_wnd_proc(
             if let Some(tray) = TRAY_MANAGER.lock().unwrap().as_ref() {
                 tray.update_tray(&config);
             }
+            crate::ui::notify_mode_changed(config.enabled);
             0
         }
         WM_COMMAND => {
@@ -218,6 +219,7 @@ fn handle_tray_command(cmd_id: usize) {
             if let Some(tray) = TRAY_MANAGER.lock().unwrap().as_ref() {
                 tray.update_tray(&config);
             }
+            crate::ui::notify_mode_changed(config.enabled);
         }
         IDM_TELEX => {
             state.config.input_method = InputMethod::Telex;
