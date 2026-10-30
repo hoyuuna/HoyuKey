@@ -2,7 +2,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD,
+    GetAsyncKeyState, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD,
     KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK, VK_CONTROL, VK_DOWN, VK_END,
     VK_ESCAPE, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT,
     VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
@@ -29,6 +29,10 @@ static BLOCKED_VK: [AtomicBool; 256] = [INIT_BOOL; 256];
 
 // Theo dõi cửa sổ đang active (foreground), đổi cửa sổ -> tự động reset buffer
 static LAST_FOREGROUND_WINDOW: AtomicIsize = AtomicIsize::new(0);
+
+// Theo dõi trạng thái phím tắt Ctrl + Shift (chuyển chế độ khi nhả phím)
+static CTRL_SHIFT_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CTRL_SHIFT_DIRTY: AtomicBool = AtomicBool::new(false);
 
 pub fn install_hook() -> bool {
     unsafe {
@@ -111,13 +115,32 @@ unsafe extern "system" fn low_level_keyboard_proc(
         reset_engine();
     }
 
+    let vk = kbd.vkCode as u16;
+    let vk_idx = (kbd.vkCode as usize) & 0xFF;
+
+    let is_ctrl_key = vk == VK_CONTROL || vk == 0xA2 || vk == 0xA3;
+    let is_shift_key = vk == VK_SHIFT || vk == 0xA0 || vk == 0xA1;
+
+    let switch_key = {
+        let state = GLOBAL_STATE.lock().unwrap();
+        state.config.switch_key
+    };
+
     let is_down = (wparam as u32 == WM_KEYDOWN) || (wparam as u32 == WM_SYSKEYDOWN);
     let is_up = (wparam as u32 == WM_KEYUP) || (wparam as u32 == WM_SYSKEYUP);
 
-    // 3. Nếu là sự kiện KeyUp của phím mà KeyDown trước đó đã bị bộ gõ chặn:
-    // Chặn luôn KeyUp này để trình duyệt (Chrome, Edge...) không bị desync trạng thái phím!
-    let vk_idx = (kbd.vkCode as usize) & 0xFF;
+    // 3. Xử lý nhả phím (KeyUp):
     if is_up {
+        // Nếu dùng phím tắt Ctrl + Shift: chuyển chế độ khi người dùng nhả phím (chuẩn Windows)
+        if switch_key == SwitchKey::CtrlShift && (is_ctrl_key || is_shift_key) {
+            if CTRL_SHIFT_ACTIVE.swap(false, Ordering::SeqCst) {
+                if !CTRL_SHIFT_DIRTY.swap(false, Ordering::SeqCst) {
+                    toggle_vietnamese_mode();
+                }
+            }
+        }
+
+        // Chặn KeyUp nếu KeyDown trước đó đã bị bộ gõ chặn (tránh desync trên Chrome/Edge)
         if BLOCKED_VK[vk_idx].swap(false, Ordering::SeqCst) {
             return 1;
         }
@@ -128,10 +151,31 @@ unsafe extern "system" fn low_level_keyboard_proc(
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
-    // 4. Kiểm tra phím tắt chuyển đổi chế độ V / E (Ctrl+Shift hoặc Alt+Z)
-    if check_hotkey(kbd.vkCode as u16) {
-        toggle_vietnamese_mode();
-        return CallNextHookEx(null_mut(), code, wparam, lparam);
+    // 4. Kiểm tra phím tắt chuyển đổi chế độ V / E
+    match switch_key {
+        SwitchKey::CtrlShift => {
+            if is_ctrl_key || is_shift_key {
+                let ctrl_down = (GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
+                let shift_down = (GetAsyncKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0;
+                if ctrl_down && shift_down {
+                    CTRL_SHIFT_ACTIVE.store(true, Ordering::SeqCst);
+                    CTRL_SHIFT_DIRTY.store(false, Ordering::SeqCst);
+                }
+            } else {
+                // Người dùng bấm phím thứ 3 trong lúc giữ Ctrl+Shift (ví dụ Ctrl+Shift+S) -> hủy chuyển chế độ
+                CTRL_SHIFT_DIRTY.store(true, Ordering::SeqCst);
+                CTRL_SHIFT_ACTIVE.store(false, Ordering::SeqCst);
+            }
+        }
+        SwitchKey::AltZ => {
+            let is_z = vk == 0x5A || vk == b'Z' as u16 || vk == b'z' as u16;
+            let alt_down = (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0;
+            if is_z && alt_down {
+                toggle_vietnamese_mode();
+                BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
+                return 1;
+            }
+        }
     }
 
     // 5. Nếu đang giữ Ctrl, Alt hoặc Windows -> phím tắt app khác (Ctrl+C, Ctrl+A, Alt+Tab...),
@@ -193,26 +237,6 @@ unsafe extern "system" fn low_level_keyboard_proc(
     CallNextHookEx(null_mut(), code, wparam, lparam)
 }
 
-fn check_hotkey(vk: u16) -> bool {
-    let state = GLOBAL_STATE.lock().unwrap();
-    let switch_key = state.config.switch_key;
-    drop(state);
-
-    unsafe {
-        match switch_key {
-            SwitchKey::CtrlShift => {
-                let ctrl_down = (GetKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
-                let shift_down = (GetKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0;
-
-                (vk == VK_SHIFT && ctrl_down) || (vk == VK_CONTROL && shift_down)
-            }
-            SwitchKey::AltZ => {
-                let alt_down = (GetKeyState(VK_MENU as i32) as u16 & 0x8000) != 0;
-                (vk == 0x5A || vk == b'Z' as u16) && alt_down
-            }
-        }
-    }
-}
 
 pub fn toggle_vietnamese_mode() {
     let (hwnd, enabled) = {

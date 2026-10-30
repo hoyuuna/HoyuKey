@@ -1154,26 +1154,11 @@ unsafe fn render_page_elements(
         let mode_p = MODE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
         let mode_ease = 1.0 - (1.0 - mode_p).powi(3);
 
-        // Màu E: #70bbff (112, 187, 255), Màu V: #ffa9d2 (255, 169, 210)
-        let accent_r = (112.0 + (255.0 - 112.0) * mode_ease).round() as u32;
-        let accent_g = (187.0 + (169.0 - 187.0) * mode_ease).round() as u32;
-        let accent_b = (255.0 + (210.0 - 255.0) * mode_ease).round() as u32;
-        let accent_rgb = (accent_r << 16) | (accent_g << 8) | accent_b;
-
-        // Viền thẻ có ánh màu nhẹ theo trạng thái (tăng nhẹ khi hover)
-        let border_alpha = if hover_id == 10 { 0x55 } else { 0x33 };
-        let card_border = (border_alpha << 24) | accent_rgb;
         let status_bg = if hover_id == 10 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+        gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 76, 10, status_bg, ARGB_CARD_BORDER, 1.0);
 
-        // Vẽ thẻ nền bo góc
-        gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 76, 10, status_bg, card_border, 1.0);
-
-        // Ánh sáng gradient hắt từ trái sang phải blend mượt mà vào nền tối của thẻ
-        let glow_alpha = if hover_id == 10 { 0x40 } else { 0x30 };
-        gdiplus_draw_card_glow(graphics, card_x, 86, card_w, 76, 10, accent_rgb, glow_alpha);
-
-        // Icon E và V ở vị trí bên trái (thay thế dấu chấm trước đây), hỗ trợ animation crossfade mượt mà
-        let icon_x = card_x + 18;
+        // Icon E và V ở vị trí bên trái (chỉ có icon thay đổi với animation mượt mà)
+        let icon_x = left_text;
         let icon_y = 106;
         let icon_size = 36;
 
@@ -1779,7 +1764,7 @@ unsafe fn gdiplus_draw_image_alpha(
     GdipDisposeImage(bitmap as *mut GpImage);
 }
 
-unsafe fn gdiplus_draw_card_glow(
+unsafe fn _gdiplus_draw_card_glow(
     graphics: *mut GpGraphics,
     card_x: i32,
     card_y: i32,
