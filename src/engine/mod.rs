@@ -417,18 +417,24 @@ pub fn is_valid_vietnamese_syllable(word: &str) -> bool {
 fn is_valid_vowel_cluster(cluster: &str) -> bool {
     matches!(
         cluster,
-        // Đơn âm
+        // Đơn âm (12 nguyên âm đơn tiếng Việt)
         "a" | "ă" | "â" | "e" | "ê" | "i" | "y" | "o" | "ô" | "ơ" | "u" | "ư"
-        // Nhị trùng âm (diphthong)
-        | "ia" | "iê" | "ya" | "yê" | "ua" | "uô" | "ưa" | "ươ"
+        // Nhị trùng âm (Diphthongs) & các dạng thô khi đang gõ
+        | "ia" | "iê" | "ie" | "ya" | "yê" | "ye"
+        | "ua" | "uô" | "uo" | "ưa" | "ươ"
         | "ai" | "ao" | "au" | "ay" | "âu" | "ây"
         | "eo" | "êu"
         | "iu"
         | "oi" | "ôi" | "ơi"
         | "ui" | "uy" | "uơ" | "uâ" | "ưi" | "ưu"
         | "oa" | "oă" | "oe" | "oo"
-        // Tam trùng âm (triphthong)
-        | "iêu" | "yêu" | "oai" | "oay" | "oao" | "oeo" | "uôi" | "ươi" | "uya" | "uyê" | "uyu" | "uye"
+        // Tam trùng âm (Triphthongs) & các dạng thô khi đang gõ (uây, ươu, uôi, ươi, iêu, yêu...)
+        | "iêu" | "ieu" | "yêu" | "yeu"
+        | "oai" | "oay" | "oao" | "oeo"
+        | "uôi" | "uoi" | "ươi"
+        | "ươu" | "uou"
+        | "uây" | "uay"
+        | "uya" | "uyê" | "uye" | "uyu"
     )
 }
 
@@ -967,5 +973,31 @@ mod tests {
         let a_m = engine.process_char('m', &config);
         assert_eq!(a_m, KeyAction::PassThrough);
         assert_eq!(engine.current_word, "đm");
+    }
+
+    #[test]
+    fn test_telex_rich_vowels() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // "khuấy" (vần uây)
+        for ch in "khuaays".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "khuấy");
+
+        // "rượu" (vần ươu)
+        engine.reset();
+        for ch in "ruouwj".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "rượu");
+
+        // "chuối" (vần uôi)
+        engine.reset();
+        for ch in "chuoos".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "chuối");
     }
 }
