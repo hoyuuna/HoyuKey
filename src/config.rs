@@ -30,6 +30,12 @@ pub struct Config {
     pub modify_tone_in_word: bool,
     /// Khởi động cùng Windows khi đăng nhập máy tính
     pub start_with_windows: bool,
+    /// Tự động viết hoa chữ cái đầu dòng
+    pub auto_caps_line: bool,
+    /// Tự động viết hoa chữ cái sau dấu chấm
+    pub auto_caps_sentence: bool,
+    /// Tự động thêm dấu chấm câu khi xuống dòng hoặc gửi
+    pub auto_period_enter: bool,
 }
 
 impl Default for Config {
@@ -44,6 +50,9 @@ impl Default for Config {
             smart_english: true,
             modify_tone_in_word: true,
             start_with_windows: false,
+            auto_caps_line: true,
+            auto_caps_sentence: true,
+            auto_period_enter: true,
         }
     }
 }
@@ -80,7 +89,7 @@ impl Config {
 
     pub fn to_json_string(&self) -> String {
         format!(
-            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {}\n}}\n",
+            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {}\n}}\n",
             self.enabled,
             match self.input_method {
                 InputMethod::Telex => "Telex",
@@ -96,6 +105,9 @@ impl Config {
             self.smart_english,
             self.modify_tone_in_word,
             self.start_with_windows,
+            self.auto_caps_line,
+            self.auto_caps_sentence,
+            self.auto_period_enter,
         )
     }
 
@@ -126,6 +138,9 @@ impl Config {
                     "free_marking" => self.free_marking = val == "true",
                     "smart_english" => self.smart_english = val == "true",
                     "modify_tone_in_word" => self.modify_tone_in_word = val == "true",
+                    "auto_caps_line" => self.auto_caps_line = val == "true",
+                    "auto_caps_sentence" => self.auto_caps_sentence = val == "true",
+                    "auto_period_enter" => self.auto_period_enter = val == "true",
                     _ => {}
                 }
             }

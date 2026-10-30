@@ -112,7 +112,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
     let current_fg = GetForegroundWindow() as isize;
     let prev_fg = LAST_FOREGROUND_WINDOW.swap(current_fg, Ordering::SeqCst);
     if prev_fg != 0 && prev_fg != current_fg {
-        reset_engine();
+        let mut state = GLOBAL_STATE.lock().unwrap();
+        state.engine.on_window_change();
     }
 
     let vk = kbd.vkCode as u16;
@@ -204,7 +205,22 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 return CallNextHookEx(null_mut(), code, wparam, lparam);
             }
         }
-        VK_RETURN | VK_ESCAPE | VK_TAB | VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_HOME
+        VK_RETURN => {
+            let auto_dot = {
+                let mut state = GLOBAL_STATE.lock().unwrap();
+                let should_dot = state.config.auto_period_enter
+                    && state.engine.should_auto_period_before_enter();
+                state.engine.on_enter();
+                should_dot
+            };
+
+            if auto_dot {
+                send_transform_batch(0, ".");
+            }
+
+            return CallNextHookEx(null_mut(), code, wparam, lparam);
+        }
+        VK_ESCAPE | VK_TAB | VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_HOME
         | VK_END | VK_PRIOR | VK_NEXT => {
             reset_engine();
             return CallNextHookEx(null_mut(), code, wparam, lparam);

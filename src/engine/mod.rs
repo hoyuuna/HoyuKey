@@ -25,6 +25,11 @@ pub struct Engine {
     pub raw_keys: String,
     pub has_transformed: bool,
     last_word_before_space: Option<(String, String, bool)>,
+    pub at_start_of_line: bool,
+    pub after_sentence_end: bool,
+    pub saw_sentence_end_punct: bool,
+    pub has_typed_in_line: bool,
+    pub last_char_typed: Option<char>,
 }
 
 impl Engine {
@@ -34,6 +39,11 @@ impl Engine {
             raw_keys: String::new(),
             has_transformed: false,
             last_word_before_space: None,
+            at_start_of_line: true,
+            after_sentence_end: false,
+            saw_sentence_end_punct: false,
+            has_typed_in_line: false,
+            last_char_typed: None,
         }
     }
 
@@ -42,6 +52,34 @@ impl Engine {
         self.raw_keys.clear();
         self.has_transformed = false;
         self.last_word_before_space = None;
+    }
+
+    pub fn on_enter(&mut self) {
+        self.reset();
+        self.at_start_of_line = true;
+        self.after_sentence_end = false;
+        self.saw_sentence_end_punct = false;
+        self.has_typed_in_line = false;
+        self.last_char_typed = Some('\n');
+    }
+
+    pub fn on_window_change(&mut self) {
+        self.reset();
+        self.at_start_of_line = true;
+        self.after_sentence_end = false;
+        self.saw_sentence_end_punct = false;
+        self.has_typed_in_line = false;
+        self.last_char_typed = None;
+    }
+
+    pub fn should_auto_period_before_enter(&self) -> bool {
+        if !self.has_typed_in_line {
+            return false;
+        }
+        match self.last_char_typed {
+            Some(c) => !matches!(c, '.' | '?' | '!' | ':' | ';' | ',' | '-' | '\n' | '\r'),
+            None => false,
+        }
     }
 
     /// Xử lý phím Backspace:
@@ -67,7 +105,7 @@ impl Engine {
     }
 
     /// Xử lý một ký tự gõ vào
-    pub fn process_char(&mut self, c: char, config: &Config) -> KeyAction {
+    pub fn process_char(&mut self, mut c: char, config: &Config) -> KeyAction {
         if !config.enabled {
             self.reset();
             return KeyAction::PassThrough;
@@ -75,6 +113,10 @@ impl Engine {
 
         // 1. Phím khoảng trắng (Space / Tab): ngắt từ và tạm lưu từ vừa gõ phòng khi cần sửa ngay
         if c.is_whitespace() {
+            self.last_char_typed = Some(c);
+            if self.saw_sentence_end_punct {
+                self.after_sentence_end = true;
+            }
             if !self.current_word.is_empty() {
                 self.last_word_before_space = Some((
                     self.current_word.clone(),
@@ -91,6 +133,14 @@ impl Engine {
         // 2. Dấu câu / phân cách câu (phẩy, chấm, hai chấm, ngoặc...):
         // Kết thúc cụm từ hoàn toàn, reset sạch buffer để không bao giờ bị nhảy nhầm chữ ("luôn, " không bị thành "luoon")
         if is_word_boundary(c) {
+            self.last_char_typed = Some(c);
+            if matches!(c, '.' | '?' | '!') {
+                self.saw_sentence_end_punct = true;
+                self.after_sentence_end = false;
+            } else {
+                self.saw_sentence_end_punct = false;
+                self.after_sentence_end = false;
+            }
             self.reset();
             return KeyAction::PassThrough;
         }
@@ -106,9 +156,28 @@ impl Engine {
             self.reset();
         }
 
+        // 3. Xử lý tính năng Tự động viết hoa (Auto Capitalization)
+        let should_capitalize = c.is_alphabetic()
+            && ((config.auto_caps_line && self.at_start_of_line)
+                || (config.auto_caps_sentence && self.after_sentence_end));
+
+        let was_lowercase = c.is_ascii_lowercase();
+        if should_capitalize {
+            self.at_start_of_line = false;
+            self.after_sentence_end = false;
+            self.saw_sentence_end_punct = false;
+            c = c.to_uppercase().next().unwrap_or(c);
+        } else if c.is_alphabetic() {
+            self.at_start_of_line = false;
+            self.after_sentence_end = false;
+            self.saw_sentence_end_punct = false;
+        }
+
+        self.has_typed_in_line = true;
+        self.last_char_typed = Some(c);
         self.raw_keys.push(c);
 
-        // 3. Thử biến đổi theo quy tắc Telex / VNI
+        // 4. Thử biến đổi theo quy tắc Telex / VNI
         let transformed = match config.input_method {
             InputMethod::Telex => telex::transform_telex(
                 &self.current_word,
@@ -148,7 +217,7 @@ impl Engine {
             };
         }
 
-        // 4. Tự động tái cân bằng vị trí dấu thanh khi sửa hoặc gõ thêm nguyên âm
+        // 5. Tự động tái cân bằng vị trí dấu thanh khi sửa hoặc gõ thêm nguyên âm
         if config.modify_tone_in_word
             && c.is_ascii_alphabetic()
             && (!config.smart_english || !telex::is_foreign_word(&self.current_word))
@@ -200,7 +269,7 @@ impl Engine {
             }
         }
 
-        // 5. Nếu không có biến đổi:
+        // 6. Nếu không có biến đổi:
         // Nếu đã từng biến đổi (ví dụ "tá") và phím c này ("k") làm từ thành không hợp lệ ("ták"):
         if config.auto_restore && self.has_transformed {
             let mut test_word = self.current_word.clone();
@@ -214,6 +283,16 @@ impl Engine {
                     text,
                 };
             }
+        }
+
+        // Nếu người dùng gõ chữ thường nhưng được viết hoa tự động:
+        if should_capitalize && was_lowercase {
+            self.current_word.push(c);
+            self.has_transformed = true;
+            return KeyAction::Transform {
+                backspaces: 0,
+                text: c.to_string(),
+            };
         }
 
         // Không có biến đổi và từ vẫn hợp lệ: thêm ký tự vào buffer và cho phím đi qua tự nhiên
@@ -324,8 +403,12 @@ fn is_valid_vowel_cluster(cluster: &str) -> bool {
         "a" | "ă" | "â" | "e" | "ê" | "i" | "y" | "o" | "ô" | "ơ" | "u" | "ư"
         // Nhị trùng âm (diphthong)
         | "ia" | "iê" | "ya" | "yê" | "ua" | "uô" | "ưa" | "ươ"
-        | "ai" | "ao" | "au" | "ay" | "âu" | "eo" | "iu" | "oi" | "ơi" | "ui" | "ưi"
-        | "oa" | "oă" | "oe" | "oo" | "uơ" | "uy" | "uâ" | "ưu"
+        | "ai" | "ao" | "au" | "ay" | "âu" | "ây"
+        | "eo" | "êu"
+        | "iu"
+        | "oi" | "ôi" | "ơi"
+        | "ui" | "uy" | "uơ" | "uâ" | "ưi" | "ưu"
+        | "oa" | "oă" | "oe" | "oo"
         // Tam trùng âm (triphthong)
         | "iêu" | "yêu" | "oai" | "oay" | "oao" | "oeo" | "uôi" | "ươi" | "uya" | "uyê" | "uyu"
     )
@@ -459,6 +542,47 @@ mod tests {
             }
         );
         assert_eq!(engine.current_word, "chuyển");
+    }
+
+    #[test]
+    fn test_telex_toi() {
+        let mut engine = Engine::new();
+        let mut config = Config::default();
+        config.auto_caps_line = false;
+
+        for ch in "tooi".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "tôi");
+    }
+
+    #[test]
+    fn test_writing_assistant() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // 1. Viết hoa đầu dòng: 't' -> "T"
+        let a1 = engine.process_char('t', &config);
+        assert_eq!(a1, KeyAction::Transform { backspaces: 0, text: "T".to_string() });
+
+        engine.process_char('o', &config);
+        engine.process_char('o', &config);
+        engine.process_char('i', &config);
+        assert_eq!(engine.current_word, "Tôi");
+
+        // gõ dấu chấm và khoảng trắng
+        engine.process_char('.', &config);
+        engine.process_char(' ', &config);
+
+        // 2. Viết hoa sau dấu chấm: 'b' -> "B"
+        let a2 = engine.process_char('b', &config);
+        assert_eq!(a2, KeyAction::Transform { backspaces: 0, text: "B".to_string() });
+        engine.process_char('a', &config);
+        engine.process_char('n', &config);
+        assert_eq!(engine.current_word, "Bạn");
+
+        // 3. Tự động chấm câu khi xuống dòng:
+        assert!(engine.should_auto_period_before_enter());
     }
 
     #[test]
