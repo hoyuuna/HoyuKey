@@ -167,14 +167,17 @@ unsafe extern "system" fn tray_wnd_proc(
         WM_APP_TRAY => {
             let event = lparam as u32;
             match event {
-                WM_LBUTTONUP | WM_RBUTTONUP => {
+                WM_LBUTTONUP => {
+                    hook::toggle_vietnamese_mode();
+                }
+                WM_LBUTTONDBLCLK => {
+                    show_settings_window();
+                }
+                WM_RBUTTONUP => {
                     let config = GLOBAL_STATE.lock().unwrap().config.clone();
                     if let Some(tray) = TRAY_MANAGER.lock().unwrap().as_ref() {
                         tray.show_context_menu(&config);
                     }
-                }
-                WM_LBUTTONDBLCLK => {
-                    show_settings_window();
                 }
                 _ => {}
             }

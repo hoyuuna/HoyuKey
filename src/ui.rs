@@ -8,15 +8,18 @@ use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, DIB_RGB_COLORS, HALFTONE, PAINTSTRUCT, SRCCOPY,
 };
 use windows_sys::Win32::Graphics::GdiPlus::*;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos,
     GetSystemMetrics, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
     SendMessageW, SetCursor, SetForegroundWindow, SetTimer, ShowWindow, CS_HREDRAW, CS_VREDRAW,
     IDC_ARROW, IDC_HAND, ICON_BIG, ICON_SMALL, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_RESTORE,
-    SW_SHOW, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT,
-    WM_SETCURSOR, WM_SETICON, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_EX_DLGMODALFRAME,
+    SW_SHOW, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCMOUSEMOVE,
+    WM_PAINT, WM_SETCURSOR, WM_SETICON, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_EX_DLGMODALFRAME,
     WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
 };
+
+const WM_MOUSELEAVE: u32 = 0x02A3;
 
 use crate::config::{Config, InputMethod, SwitchKey};
 use crate::tray::WM_APP_UPDATE_TRAY;
@@ -214,6 +217,7 @@ pub fn show_settings_window() {
         AUTO_RESTORE_PROGRESS.store(if state.config.auto_restore { 1000 } else { 0 }, Ordering::SeqCst);
         INPUT_METHOD_PROGRESS.store(if state.config.input_method == InputMethod::Vni { 1000 } else { 0 }, Ordering::SeqCst);
         SWITCH_KEY_PROGRESS.store(if state.config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, Ordering::SeqCst);
+        HOVER_ITEM.store(-1, Ordering::SeqCst);
         drop(state);
 
         unsafe {
@@ -263,6 +267,14 @@ unsafe extern "system" fn settings_wnd_proc(
         }
         WM_ERASEBKGND => 1,
         WM_MOUSEMOVE => {
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            TrackMouseEvent(&mut tme);
+
             let x = (lparam & 0xFFFF) as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i32;
             let mut rect: RECT = std::mem::zeroed();
@@ -277,6 +289,20 @@ unsafe extern "system" fn settings_wnd_proc(
                 InvalidateRect(hwnd, null_mut(), 0);
             }
             0
+        }
+        WM_MOUSELEAVE => {
+            let old_hover = HOVER_ITEM.swap(-1, Ordering::SeqCst);
+            if old_hover != -1 {
+                InvalidateRect(hwnd, null_mut(), 0);
+            }
+            0
+        }
+        WM_NCMOUSEMOVE => {
+            let old_hover = HOVER_ITEM.swap(-1, Ordering::SeqCst);
+            if old_hover != -1 {
+                InvalidateRect(hwnd, null_mut(), 0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_TIMER => {
             if wparam as usize == TIMER_ID_ANIM {
@@ -421,7 +447,6 @@ unsafe extern "system" fn settings_wnd_proc(
                 SetCursor(LoadCursorW(null_mut(), IDC_HAND));
                 1
             } else {
-                HOVER_ITEM.store(-1, Ordering::SeqCst);
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
         }
@@ -730,6 +755,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
 }
 
 fn start_page_transition(hwnd: HWND, target_page: u8, direction: i32) {
+    HOVER_ITEM.store(-1, Ordering::SeqCst);
     if target_page == 3 {
         crate::updater::ensure_changelog_loaded(hwnd);
     }
