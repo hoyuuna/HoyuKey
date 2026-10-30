@@ -50,9 +50,9 @@ impl Default for Config {
             smart_english: true,
             modify_tone_in_word: true,
             start_with_windows: false,
-            auto_caps_line: true,
-            auto_caps_sentence: true,
-            auto_period_enter: true,
+            auto_caps_line: false,
+            auto_caps_sentence: false,
+            auto_period_enter: false,
         }
     }
 }

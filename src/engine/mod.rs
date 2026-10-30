@@ -288,7 +288,6 @@ impl Engine {
         // Nếu người dùng gõ chữ thường nhưng được viết hoa tự động:
         if should_capitalize && was_lowercase {
             self.current_word.push(c);
-            self.has_transformed = true;
             return KeyAction::Transform {
                 backspaces: 0,
                 text: c.to_string(),
@@ -410,7 +409,7 @@ fn is_valid_vowel_cluster(cluster: &str) -> bool {
         | "ui" | "uy" | "uơ" | "uâ" | "ưi" | "ưu"
         | "oa" | "oă" | "oe" | "oo"
         // Tam trùng âm (triphthong)
-        | "iêu" | "yêu" | "oai" | "oay" | "oao" | "oeo" | "uôi" | "ươi" | "uya" | "uyê" | "uyu"
+        | "iêu" | "yêu" | "oai" | "oay" | "oao" | "oeo" | "uôi" | "ươi" | "uya" | "uyê" | "uyu" | "uye"
     )
 }
 
@@ -559,7 +558,10 @@ mod tests {
     #[test]
     fn test_writing_assistant() {
         let mut engine = Engine::new();
-        let config = Config::default();
+        let mut config = Config::default();
+        config.auto_caps_line = true;
+        config.auto_caps_sentence = true;
+        config.auto_period_enter = true;
 
         // 1. Viết hoa đầu dòng: 't' -> "T"
         let a1 = engine.process_char('t', &config);
@@ -579,6 +581,7 @@ mod tests {
         assert_eq!(a2, KeyAction::Transform { backspaces: 0, text: "B".to_string() });
         engine.process_char('a', &config);
         engine.process_char('n', &config);
+        engine.process_char('j', &config);
         assert_eq!(engine.current_word, "Bạn");
 
         // 3. Tự động chấm câu khi xuống dòng:

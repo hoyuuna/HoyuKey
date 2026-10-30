@@ -44,9 +44,9 @@ const E_BGRA_32: &[u8] = include_bytes!("../icon/e_32.bin");
 
 static START_WITH_WINDOWS_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static MODE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
-static AUTO_CAPS_LINE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
-static AUTO_CAPS_SENTENCE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
-static AUTO_PERIOD_ENTER_PROGRESS: AtomicU32 = AtomicU32::new(1000);
+static AUTO_CAPS_LINE_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static AUTO_CAPS_SENTENCE_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static AUTO_PERIOD_ENTER_PROGRESS: AtomicU32 = AtomicU32::new(0);
 
 // Quản lý trang và hiệu ứng chuyển trang (Smooth Page Transition Animation)
 static CURRENT_PAGE: AtomicU8 = AtomicU8::new(0);
