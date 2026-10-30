@@ -1,17 +1,33 @@
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Mutex;
 use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Graphics::Gdi::InvalidateRect;
 use windows_sys::Win32::Networking::WinInet::{
     InternetCloseHandle, InternetOpenUrlW, InternetOpenW, InternetReadFile,
     INTERNET_FLAG_IGNORE_CERT_CN_INVALID, INTERNET_FLAG_IGNORE_CERT_DATE_INVALID,
     INTERNET_FLAG_RELOAD, INTERNET_OPEN_TYPE_DIRECT,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    MessageBoxW, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
-};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub fn check_for_updates_interactive(hwnd: HWND) {
+// 0: Không hiện modal
+// 1: Đang kiểm tra cập nhật...
+// 2: Phát hiện bản cập nhật mới (Hỏi Cập nhật ngay / Để sau)
+// 3: Đang tải xuống và cài đặt...
+// 4: Bạn đang ở phiên bản mới nhất!
+// 5: Lỗi kết nối mạng
+pub static MODAL_STATE: AtomicU8 = AtomicU8::new(0);
+
+pub static LATEST_VERSION_TAG: Mutex<String> = Mutex::new(String::new());
+pub static LATEST_DOWNLOAD_URL: Mutex<String> = Mutex::new(String::new());
+
+pub fn start_checking_update(hwnd: HWND) {
+    MODAL_STATE.store(1, Ordering::SeqCst);
+    unsafe {
+        InvalidateRect(hwnd, null_mut(), 0);
+    }
+
     let hwnd_raw = hwnd as isize;
     std::thread::spawn(move || {
         let hwnd = hwnd_raw as HWND;
@@ -21,49 +37,43 @@ pub fn check_for_updates_interactive(hwnd: HWND) {
                 let clean_current = CURRENT_VERSION.trim_start_matches('v').trim();
 
                 if is_newer_version(clean_latest, clean_current) {
-                    let prompt = format!(
-                        "Phát hiện bản cập nhật mới: {}\n(Phiên bản hiện tại: v{})\n\nBạn có muốn tải xuống và cập nhật ngay không?",
-                        latest_tag, clean_current
-                    );
-                    let res = unsafe {
-                        MessageBoxW(
-                            hwnd,
-                            to_wide(&prompt).as_ptr(),
-                            to_wide("HoyuKey Cập nhật").as_ptr(),
-                            MB_YESNO | MB_ICONQUESTION,
-                        )
-                    };
-
-                    if res == IDYES {
-                        perform_update(hwnd, &download_url);
-                    }
+                    *LATEST_VERSION_TAG.lock().unwrap() = latest_tag;
+                    *LATEST_DOWNLOAD_URL.lock().unwrap() = download_url;
+                    MODAL_STATE.store(2, Ordering::SeqCst);
                 } else {
-                    let msg = format!(
-                        "Bạn đang sử dụng phiên bản mới nhất (v{})!",
-                        clean_current
-                    );
-                    unsafe {
-                        MessageBoxW(
-                            hwnd,
-                            to_wide(&msg).as_ptr(),
-                            to_wide("HoyuKey - Thông báo").as_ptr(),
-                            MB_OK | MB_ICONINFORMATION,
-                        );
-                    }
+                    MODAL_STATE.store(4, Ordering::SeqCst);
                 }
             }
             Err(_) => {
-                unsafe {
-                    MessageBoxW(
-                        hwnd,
-                        to_wide("Không thể kết nối đến GitHub để kiểm tra cập nhật.\nVui lòng kiểm tra lại kết nối mạng Internet!").as_ptr(),
-                        to_wide("HoyuKey - Lỗi kết nối").as_ptr(),
-                        MB_OK | MB_ICONWARNING,
-                    );
-                }
+                MODAL_STATE.store(5, Ordering::SeqCst);
             }
         }
+        unsafe {
+            InvalidateRect(hwnd, null_mut(), 0);
+        }
     });
+}
+
+pub fn start_downloading_update(hwnd: HWND) {
+    MODAL_STATE.store(3, Ordering::SeqCst);
+    unsafe {
+        InvalidateRect(hwnd, null_mut(), 0);
+    }
+
+    let download_url = LATEST_DOWNLOAD_URL.lock().unwrap().clone();
+    let hwnd_raw = hwnd as isize;
+
+    std::thread::spawn(move || {
+        let hwnd = hwnd_raw as HWND;
+        perform_update(hwnd, &download_url);
+    });
+}
+
+pub fn close_modal(hwnd: HWND) {
+    MODAL_STATE.store(0, Ordering::SeqCst);
+    unsafe {
+        InvalidateRect(hwnd, null_mut(), 0);
+    }
 }
 
 fn fetch_latest_release_info() -> Result<(String, String), String> {
@@ -71,11 +81,9 @@ fn fetch_latest_release_info() -> Result<(String, String), String> {
     let json_bytes = http_get(url)?;
     let json_str = String::from_utf8_lossy(&json_bytes);
 
-    // Trích xuất "tag_name": "v0.x.x"
     let tag_name = extract_json_field(&json_str, "tag_name")
         .ok_or_else(|| "Không tìm thấy tag_name".to_string())?;
 
-    // Trích xuất "browser_download_url": "https://...HoyuKey.exe"
     let download_url = extract_download_url(&json_str)
         .ok_or_else(|| "Không tìm thấy file tải về HoyuKey.exe".to_string())?;
 
@@ -181,11 +189,19 @@ fn http_get(url: &str) -> Result<Vec<u8>, String> {
 fn perform_update(hwnd: HWND, download_url: &str) {
     let current_exe = match std::env::current_exe() {
         Ok(p) => p,
-        Err(_) => return,
+        Err(_) => {
+            MODAL_STATE.store(5, Ordering::SeqCst);
+            unsafe { InvalidateRect(hwnd, null_mut(), 0); }
+            return;
+        }
     };
     let current_dir = match current_exe.parent() {
         Some(d) => d.to_path_buf(),
-        None => return,
+        None => {
+            MODAL_STATE.store(5, Ordering::SeqCst);
+            unsafe { InvalidateRect(hwnd, null_mut(), 0); }
+            return;
+        }
     };
 
     let update_exe = current_dir.join("HoyuKey_new.exe");
@@ -194,21 +210,16 @@ fn perform_update(hwnd: HWND, download_url: &str) {
     // 1. Tải file mới
     let data = match http_get(download_url) {
         Ok(d) => d,
-        Err(e) => {
-            let msg = format!("Lỗi khi tải bản cập nhật: {}", e);
-            unsafe {
-                MessageBoxW(
-                    hwnd,
-                    to_wide(&msg).as_ptr(),
-                    to_wide("HoyuKey - Lỗi tải về").as_ptr(),
-                    MB_OK | MB_ICONWARNING,
-                );
-            }
+        Err(_) => {
+            MODAL_STATE.store(5, Ordering::SeqCst);
+            unsafe { InvalidateRect(hwnd, null_mut(), 0); }
             return;
         }
     };
 
     if let Err(_) = std::fs::write(&update_exe, &data) {
+        MODAL_STATE.store(5, Ordering::SeqCst);
+        unsafe { InvalidateRect(hwnd, null_mut(), 0); }
         return;
     }
 
@@ -220,6 +231,8 @@ fn perform_update(hwnd: HWND, download_url: &str) {
     );
 
     if let Err(_) = std::fs::write(&bat_file, bat_content) {
+        MODAL_STATE.store(5, Ordering::SeqCst);
+        unsafe { InvalidateRect(hwnd, null_mut(), 0); }
         return;
     }
 

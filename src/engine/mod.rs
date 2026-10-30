@@ -359,6 +359,18 @@ mod tests {
     }
 
     #[test]
+    fn test_telex_hienej_to_hien() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "hienej" -> phải ra "hiện"
+        for ch in "hienej".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "hiện");
+    }
+
+    #[test]
     fn test_telex_foreign_fix() {
         let mut engine = Engine::new();
         let config = Config::default();

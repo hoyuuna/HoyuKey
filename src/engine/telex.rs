@@ -236,7 +236,81 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool) -> Option<String
         }
     }
 
-    // 4. Nếu gõ 'w' độc lập sau phụ âm hoặc ở cuối từ
+    // 4. Áp dụng modifier mũ/móc/trăng TỰ DO cho nguyên âm bên trong từ (kể cả khi đã có phụ âm cuối)
+    // Sửa dứt điểm việc gõ 'hienej' -> 'hiện', 'viete' -> 'viêt', 'duocw' -> 'dược'
+    let vowel_indices = extract_vowel_indices(&chars);
+    if !vowel_indices.is_empty() {
+        let mut target_idx = None;
+        let mut target_mod = None;
+
+        for &idx in vowel_indices.iter().rev() {
+            if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
+                let m = match (base, vmod, key) {
+                    ('a', VowelMod::None, 'a') => Some(VowelMod::Hat),
+                    ('a', VowelMod::None, 'w') => Some(VowelMod::Breve),
+                    ('e', VowelMod::None, 'e') => Some(VowelMod::Hat),
+                    ('o', VowelMod::None, 'o') => Some(VowelMod::Hat),
+                    ('o', VowelMod::None, 'w') => Some(VowelMod::Horn),
+                    ('u', VowelMod::None, 'w') => {
+                        if idx > 0 && chars[idx - 1].to_ascii_lowercase() == 'q' {
+                            None
+                        } else {
+                            Some(VowelMod::Horn)
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(applied) = m {
+                    target_idx = Some(idx);
+                    target_mod = Some(applied);
+                    break;
+                }
+            }
+        }
+
+        if let (Some(idx), Some(mod_applied)) = (target_idx, target_mod) {
+            let mut new_chars = chars.clone();
+            let (base, _, tone, char_upper) = decompose_vietnamese_char(new_chars[idx]).unwrap();
+            let new_vowel = get_vietnamese_vowel(base, mod_applied, tone).unwrap_or(new_chars[idx]);
+            let new_vowel = if char_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
+            new_chars[idx] = new_vowel;
+            return Some(new_chars.into_iter().collect());
+        }
+
+        // Hoàn tác mũ/móc tự do nếu gõ lặp lại (ví dụ 'hiên' + 'e' -> 'hiene')
+        let mut undo_idx = None;
+        let mut undo_base = ' ';
+        for &idx in vowel_indices.iter().rev() {
+            if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
+                let is_undo = match (base, vmod, key) {
+                    ('a', VowelMod::Hat, 'a') => true,
+                    ('a', VowelMod::Breve, 'w') => true,
+                    ('e', VowelMod::Hat, 'e') => true,
+                    ('o', VowelMod::Hat, 'o') => true,
+                    ('o', VowelMod::Horn, 'w') => true,
+                    ('u', VowelMod::Horn, 'w') => true,
+                    _ => false,
+                };
+                if is_undo {
+                    undo_idx = Some(idx);
+                    undo_base = base;
+                    break;
+                }
+            }
+        }
+
+        if let Some(idx) = undo_idx {
+            let mut new_chars = chars.clone();
+            let (_, _, tone, char_upper) = decompose_vietnamese_char(new_chars[idx]).unwrap();
+            let restored = get_vietnamese_vowel(undo_base, VowelMod::None, tone).unwrap_or(undo_base);
+            let restored = if char_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
+            new_chars[idx] = restored;
+            new_chars.push(if is_upper { key.to_ascii_uppercase() } else { key });
+            return Some(new_chars.into_iter().collect());
+        }
+    }
+
+    // 5. Nếu gõ 'w' độc lập sau phụ âm hoặc ở cuối từ
     if key == 'w' {
         let mut new_chars = chars.clone();
         new_chars.push(if is_upper { 'Ư' } else { 'ư' });
