@@ -287,9 +287,9 @@ mod tests {
         let mut engine = Engine::new();
         let config = Config::default();
 
-        // Gõ 'w' lần 1 -> "ư"
+        // Gõ 'w' lần 1 -> "ư" (từ trước rỗng nên backspaces: 0)
         let a1 = engine.process_char('w', &config);
-        assert_eq!(a1, KeyAction::Transform { backspaces: 1, text: "ư".to_string() });
+        assert_eq!(a1, KeyAction::Transform { backspaces: 0, text: "ư".to_string() });
         assert_eq!(engine.current_word, "ư");
 
         // Gõ 'w' lần 2 -> hoàn tác thành "w" (chứ không phải "uw")
