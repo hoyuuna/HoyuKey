@@ -21,6 +21,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const WM_MOUSEWHEEL: u32 = 0x020A;
+
+// Quản lý cuộn nội dung (Scrollable content)
+static SCROLL_Y: AtomicI32 = AtomicI32::new(0);
+static TARGET_SCROLL_Y: AtomicI32 = AtomicI32::new(0);
 
 use crate::config::{Config, InputMethod, SwitchKey};
 use crate::tray::WM_APP_UPDATE_TRAY;
@@ -410,7 +415,21 @@ unsafe extern "system" fn settings_wnd_proc(
                 advance_anim(if config.browser_compatibility { 1000 } else { 0 }, &BROWSER_COMPAT_PROGRESS);
                 advance_anim(if config.browser_compatibility { 1000 } else { 0 }, &BROWSER_INPUT_ANIM);
 
-                // 3. Modal Popup Pop-out Animation
+                // 3. Easing cuộn nội dung mượt mà 60 FPS
+                let curr_scroll = SCROLL_Y.load(Ordering::SeqCst);
+                let target_scroll = TARGET_SCROLL_Y.load(Ordering::SeqCst);
+                if curr_scroll != target_scroll {
+                    still_animating = true;
+                    let diff = target_scroll - curr_scroll;
+                    let step = if diff.abs() <= 2 {
+                        diff
+                    } else {
+                        (diff as f32 * 0.35).round() as i32
+                    };
+                    SCROLL_Y.store(curr_scroll + step, Ordering::SeqCst);
+                }
+
+                // 4. Modal Popup Pop-out Animation
                 let modal_state = crate::updater::MODAL_STATE.load(Ordering::SeqCst);
                 if modal_state > 0 {
                     let curr_modal_anim = MODAL_ANIM_PROGRESS.load(Ordering::SeqCst);
@@ -489,6 +508,23 @@ unsafe extern "system" fn settings_wnd_proc(
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
+        WM_MOUSEWHEEL => {
+            let page = CURRENT_PAGE.load(Ordering::SeqCst);
+            if page == 0 {
+                let delta = ((wparam >> 16) & 0xFFFF) as i16;
+                let current_target = TARGET_SCROLL_Y.load(Ordering::SeqCst);
+                let scroll_step = 42;
+                let new_target = if delta < 0 {
+                    (current_target + scroll_step).min(80)
+                } else {
+                    (current_target - scroll_step).max(0)
+                };
+                TARGET_SCROLL_Y.store(new_target, Ordering::SeqCst);
+                SetTimer(hwnd, TIMER_ID_ANIM, 16, None);
+                InvalidateRect(hwnd, null_mut(), 0);
+            }
+            0
+        }
         WM_CLOSE => {
             ShowWindow(hwnd, SW_HIDE);
             0
@@ -543,9 +579,9 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
 
     let (card_x, card_w, card_right, right_ctrl, _, _) = get_layout_metrics(client_w);
 
-    // 1. Fixed Bottom Buttons (luôn có ở mọi trang): y = 590..636
+    // 1. Fixed Bottom Dock (y >= 566): 2 nút Thoát & Đóng độc lập với cuộn trang
     let btn_w = (card_w - 12) / 2;
-    if y >= 590 && y <= 636 {
+    if y >= 578 && y <= 634 {
         if x >= card_x && x <= card_x + btn_w {
             return 30; // Thoát HoyuKey
         }
@@ -554,31 +590,37 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             return 31; // Đóng
         }
     }
+    if y >= 566 {
+        return -1;
+    }
 
     if page == 0 {
-        // --- TRANG CHỦ ---
+        // --- TRANG CHỦ (Hỗ trợ cuộn chuột scroll_y) ---
+        let scroll_y = SCROLL_Y.load(Ordering::SeqCst);
+        let y_content = y + scroll_y;
+
         // Status Card: y = 86..158
-        if x >= card_x && x <= card_right && y >= 86 && y <= 158 {
+        if x >= card_x && x <= card_right && y_content >= 86 && y_content <= 158 {
             return 10;
         }
-        // Menu item 1: Cài đặt đánh máy: y = 184..246
-        if x >= card_x && x <= card_right && y >= 184 && y <= 246 {
+        // Menu item 1: Cài đặt đánh máy: y = 212..274
+        if x >= card_x && x <= card_right && y_content >= 212 && y_content <= 274 {
             return 11;
         }
-        // Menu item 2: Hỗ trợ viết: y = 252..314
-        if x >= card_x && x <= card_right && y >= 252 && y <= 314 {
+        // Menu item 2: Hỗ trợ viết: y = 286..348
+        if x >= card_x && x <= card_right && y_content >= 286 && y_content <= 348 {
             return 14;
         }
-        // Menu item 3: Nâng cao: y = 320..382 (ngay trên Cài đặt HoyuKey)
-        if x >= card_x && x <= card_right && y >= 320 && y <= 382 {
+        // Menu item 3: Nâng cao: y = 360..422 (ngay trên Cài đặt HoyuKey)
+        if x >= card_x && x <= card_right && y_content >= 360 && y_content <= 422 {
             return 15;
         }
-        // Menu item 4: Cài đặt HoyuKey: y = 388..450
-        if x >= card_x && x <= card_right && y >= 388 && y <= 450 {
+        // Menu item 4: Cài đặt HoyuKey: y = 434..496
+        if x >= card_x && x <= card_right && y_content >= 434 && y_content <= 496 {
             return 12;
         }
-        // Menu item 5: Giới thiệu: y = 456..518
-        if x >= card_x && x <= card_right && y >= 456 && y <= 518 {
+        // Menu item 5: Giới thiệu: y = 508..570
+        if x >= card_x && x <= card_right && y_content >= 508 && y_content <= 570 {
             return 13;
         }
     } else {
@@ -652,8 +694,8 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             if input_anim > 200 {
                 let box_x = card_x + 20;
                 let box_w = card_w - 40;
-                let box_y = 168;
-                let box_h = 40;
+                let box_y = 160;
+                let box_h = 42;
                 if x >= box_x && x <= box_x + box_w && y >= box_y && y <= box_y + box_h {
                     return 72;
                 }
@@ -698,9 +740,9 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
     let (card_x, card_w, card_right, right_ctrl, _, _) = get_layout_metrics(client_w);
     let page = CURRENT_PAGE.load(Ordering::SeqCst);
 
-    // 1. Nút Thoát và Đóng (Fixed Bottom Dock ở mọi trang)
+    // 1. Nút Thoát và Đóng (Fixed Bottom Dock ở mọi trang độc lập với cuộn)
     let btn_w = (card_w - 12) / 2;
-    if y >= 590 && y <= 636 {
+    if y >= 578 && y <= 634 {
         if x >= card_x && x <= card_x + btn_w {
             unsafe {
                 PostQuitMessage(0);
@@ -715,14 +757,20 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             return;
         }
     }
+    if y >= 566 {
+        return;
+    }
 
     if TRANSITION_PROGRESS.load(Ordering::SeqCst) < 1000 {
         return;
     }
 
     if page == 0 {
+        let scroll_y = SCROLL_Y.load(Ordering::SeqCst);
+        let y_content = y + scroll_y;
+
         // --- XỬ LÝ TRANG CHỦ ---
-        if x >= card_x && x <= card_right && y >= 86 && y <= 158 {
+        if x >= card_x && x <= card_right && y_content >= 86 && y_content <= 158 {
             crate::hook::toggle_vietnamese_mode();
             unsafe {
                 InvalidateRect(hwnd, null_mut(), 0);
@@ -730,27 +778,27 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             return;
         }
 
-        if x >= card_x && x <= card_right && y >= 184 && y <= 246 {
+        if x >= card_x && x <= card_right && y_content >= 212 && y_content <= 274 {
             start_page_transition(hwnd, 1, 1);
             return;
         }
 
-        if x >= card_x && x <= card_right && y >= 252 && y <= 314 {
+        if x >= card_x && x <= card_right && y_content >= 286 && y_content <= 348 {
             start_page_transition(hwnd, 4, 1);
             return;
         }
 
-        if x >= card_x && x <= card_right && y >= 320 && y <= 382 {
+        if x >= card_x && x <= card_right && y_content >= 360 && y_content <= 422 {
             start_page_transition(hwnd, 5, 1);
             return;
         }
 
-        if x >= card_x && x <= card_right && y >= 388 && y <= 450 {
+        if x >= card_x && x <= card_right && y_content >= 434 && y_content <= 496 {
             start_page_transition(hwnd, 2, 1);
             return;
         }
 
-        if x >= card_x && x <= card_right && y >= 456 && y <= 518 {
+        if x >= card_x && x <= card_right && y_content >= 508 && y_content <= 570 {
             start_page_transition(hwnd, 3, 1);
             return;
         }
@@ -856,8 +904,8 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             if input_anim > 200 {
                 let box_x = card_x + 20;
                 let box_w = card_w - 40;
-                let box_y = 168;
-                let box_h = 40;
+                let box_y = 160;
+                let box_h = 42;
                 if x >= box_x && x <= box_x + box_w && y >= box_y && y <= box_y + box_h {
                     BROWSER_INPUT_FOCUSED.store(true, Ordering::SeqCst);
                     unsafe { InvalidateRect(hwnd, null_mut(), 0); }
@@ -890,6 +938,8 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
 
 fn start_page_transition(hwnd: HWND, target_page: u8, direction: i32) {
     HOVER_ITEM.store(-1, Ordering::SeqCst);
+    SCROLL_Y.store(0, Ordering::SeqCst);
+    TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
     if target_page == 3 {
         crate::updater::ensure_changelog_loaded(hwnd);
     }
@@ -999,11 +1049,21 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     let ease = 1.0 - (1.0 - progress).powi(3);
     let slide_distance = (card_w + 48) as f32;
 
+    // Đặt vùng Clip cho nội dung cuộn (0..566), giữ dock đáy cố định hoàn toàn
+    GdipSetClipRectI(graphics, 0, 0, w, 566, CombineModeReplace);
+
+    let scroll_y = if current_page == 0 || target_page == 0 {
+        SCROLL_Y.load(Ordering::SeqCst) as f32
+    } else {
+        0.0
+    };
+
     if trans_raw >= 1000 {
         render_page_elements(
             graphics,
             current_page,
             0.0,
+            scroll_y,
             card_x,
             card_w,
             right_ctrl,
@@ -1027,6 +1087,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 graphics,
                 current_page,
                 offset_curr,
+                scroll_y,
                 card_x,
                 card_w,
                 right_ctrl,
@@ -1046,6 +1107,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 graphics,
                 target_page,
                 offset_target,
+                0.0,
                 card_x,
                 card_w,
                 right_ctrl,
@@ -1068,6 +1130,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 graphics,
                 current_page,
                 offset_curr,
+                scroll_y,
                 card_x,
                 card_w,
                 right_ctrl,
@@ -1087,6 +1150,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
                 graphics,
                 target_page,
                 offset_target,
+                0.0,
                 card_x,
                 card_w,
                 right_ctrl,
@@ -1104,10 +1168,21 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
         }
     }
 
-    // Fixed Bottom Dock 2 nút Thoát & Đóng
+    // Bỏ clip để vẽ Fixed Bottom Dock độc lập
+    GdipResetClip(graphics);
+
+    // Fixed Bottom Dock 2 nút Thoát & Đóng (y = 566..h)
+    let dock_y = 566;
+    let mut dock_brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(ARGB_BG, &mut dock_brush);
+    GdipFillRectangleI(graphics, dock_brush as *mut GpBrush, 0, dock_y, w, h - dock_y);
+    GdipDeleteBrush(dock_brush as *mut GpBrush);
+
+    gdiplus_draw_line(graphics, 0, dock_y, w, dock_y, ARGB_DIVIDER, 1.0);
+
     let btn_w = (card_w - 12) / 2;
-    let btn_y = 590;
-    let btn_h = 46;
+    let btn_y = 582;
+    let btn_h = 44;
 
     let exit_bg = if hover_id == 30 { ARGB_DANGER_HOVER } else { ARGB_CARD_BG };
     gdiplus_draw_rounded_card(graphics, card_x, btn_y, btn_w, btn_h, 8, exit_bg, ARGB_DANGER_BORDER, 1.0);
@@ -1237,6 +1312,7 @@ unsafe fn render_page_elements(
     graphics: *mut GpGraphics,
     page: u8,
     offset_x: f32,
+    scroll_y: f32,
     base_card_x: i32,
     card_w: i32,
     base_right_ctrl: i32,
@@ -1257,23 +1333,24 @@ unsafe fn render_page_elements(
 
     if page == 0 {
         // ========================================================
-        // 🏠 TRANG CHỦ (HOME DASHBOARD)
+        // 🏠 TRANG CHỦ (HOME DASHBOARD) - CÓ THỂ CUỘN CHUỘT MƯỢT MÀ
         // ========================================================
+        let sy = scroll_y.round() as i32;
 
         // 1. Header tinh gọn: Logo 48x48 + Tiêu đề "HoyuKey Dashboard"
-        gdiplus_draw_image(graphics, card_x, 22, 48, 48, LOGO_BGRA_128, 128, 128);
-        draw_gdip_text(graphics, font_title, "HoyuKey Dashboard", card_x + 60, 26, ARGB_TEXT_PRIMARY, false);
+        gdiplus_draw_image(graphics, card_x, 22 - sy, 48, 48, LOGO_BGRA_128, 128, 128);
+        draw_gdip_text(graphics, font_title, "HoyuKey Dashboard", card_x + 60, 26 - sy, ARGB_TEXT_PRIMARY, false);
 
         // 2. Card Trạng thái hệ thống (y = 86..158, cao 72px)
         let mode_p = MODE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
         let mode_ease = 1.0 - (1.0 - mode_p).powi(3);
 
         let status_bg = if hover_id == 10 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 72, 10, status_bg, ARGB_CARD_BORDER, 1.0);
+        gdiplus_draw_rounded_card(graphics, card_x, 86 - sy, card_w, 72, 10, status_bg, ARGB_CARD_BORDER, 1.0);
 
         // Icon E và V ở vị trí bên trái (chỉ có icon thay đổi với animation mượt mà)
         let icon_x = left_text;
-        let icon_y = 104;
+        let icon_y = 104 - sy;
         let icon_size = 36;
 
         gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, E_BGRA_32, 32, 32, 1.0 - mode_ease);
@@ -1286,66 +1363,66 @@ unsafe fn render_page_elements(
         } else {
             "Tiếng Việt đang tắt"
         };
-        draw_gdip_text(graphics, font_bold, status_str, text_x, 100, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Bấm để đổi chế độ hoặc dùng phím tắt", text_x, 124, ARGB_TEXT_MUTED, false);
+        draw_gdip_text(graphics, font_bold, status_str, text_x, 100 - sy, ARGB_TEXT_PRIMARY, false);
+        draw_gdip_text(graphics, font_desc, "Bấm để đổi chế độ hoặc dùng phím tắt", text_x, 124 - sy, ARGB_TEXT_MUTED, false);
 
-        // 3. Tiêu đề nhóm
-        draw_gdip_text(graphics, font_section, "CÀI ĐẶT", card_x + 4, 172, ARGB_STATUS_MUTED, false);
+        // 3. Tiêu đề nhóm CÀI ĐẶT (cách status card 26px, cách Card 1 28px - không còn bị dính sát!)
+        draw_gdip_text(graphics, font_section, "CÀI ĐẶT", card_x + 4, 184 - sy, ARGB_STATUS_MUTED, false);
 
-        // 4. Menu item 1: Cài đặt đánh máy (y = 184..246, h = 62)
+        // 4. Menu item 1: Cài đặt đánh máy (y = 212..274, h = 62)
         let menu1_bg = if hover_id == 11 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 184, card_w, 62, 10, menu1_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 195, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_keyboard_icon(graphics, left_text + 20, 215, ARGB_TEXT_PRIMARY);
+        gdiplus_draw_rounded_card(graphics, card_x, 212 - sy, card_w, 62, 10, menu1_bg, ARGB_CARD_BORDER, 1.0);
+        gdiplus_draw_rounded_card(graphics, left_text, 223 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+        draw_vector_keyboard_icon(graphics, left_text + 20, 243 - sy, ARGB_TEXT_PRIMARY);
 
-        draw_gdip_text(graphics, font_bold, "Cài đặt đánh máy", left_text + 52, 194, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Kiểu gõ, bỏ dấu tự do, nhận diện tiếng Anh", left_text + 52, 218, ARGB_TEXT_MUTED, false);
+        draw_gdip_text(graphics, font_bold, "Cài đặt đánh máy", left_text + 52, 222 - sy, ARGB_TEXT_PRIMARY, false);
+        draw_gdip_text(graphics, font_desc, "Kiểu gõ, bỏ dấu tự do, nhận diện tiếng Anh", left_text + 52, 246 - sy, ARGB_TEXT_MUTED, false);
         let arrow1_color = if hover_id == 11 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 215, arrow1_color);
+        draw_vector_chevron_right(graphics, right_ctrl - 12, 243 - sy, arrow1_color);
 
-        // 5. Menu item 2: Hỗ trợ viết (y = 252..314, h = 62)
+        // 5. Menu item 2: Hỗ trợ viết (y = 286..348, h = 62)
         let menu2_bg = if hover_id == 14 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 252, card_w, 62, 10, menu2_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 263, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_pen_icon(graphics, left_text + 20, 283, ARGB_TEXT_PRIMARY);
+        gdiplus_draw_rounded_card(graphics, card_x, 286 - sy, card_w, 62, 10, menu2_bg, ARGB_CARD_BORDER, 1.0);
+        gdiplus_draw_rounded_card(graphics, left_text, 297 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+        draw_vector_pen_icon(graphics, left_text + 20, 317 - sy, ARGB_TEXT_PRIMARY);
 
-        draw_gdip_text(graphics, font_bold, "Hỗ trợ viết", left_text + 52, 262, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Viết hoa đầu dòng, sau dấu chấm, tự thêm chấm", left_text + 52, 286, ARGB_TEXT_MUTED, false);
+        draw_gdip_text(graphics, font_bold, "Hỗ trợ viết", left_text + 52, 296 - sy, ARGB_TEXT_PRIMARY, false);
+        draw_gdip_text(graphics, font_desc, "Viết hoa đầu dòng, sau dấu chấm, tự thêm chấm", left_text + 52, 320 - sy, ARGB_TEXT_MUTED, false);
         let arrow2_color = if hover_id == 14 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 283, arrow2_color);
+        draw_vector_chevron_right(graphics, right_ctrl - 12, 317 - sy, arrow2_color);
 
-        // 6. Menu item 3: Nâng cao (y = 320..382, h = 62)
+        // 6. Menu item 3: Nâng cao (y = 360..422, h = 62)
         let menu_adv_bg = if hover_id == 15 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 320, card_w, 62, 10, menu_adv_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 331, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_gear_icon(graphics, left_text + 20, 351, ARGB_TEXT_PRIMARY);
+        gdiplus_draw_rounded_card(graphics, card_x, 360 - sy, card_w, 62, 10, menu_adv_bg, ARGB_CARD_BORDER, 1.0);
+        gdiplus_draw_rounded_card(graphics, left_text, 371 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+        draw_vector_gear_icon(graphics, left_text + 20, 391 - sy, ARGB_TEXT_PRIMARY);
 
-        draw_gdip_text(graphics, font_bold, "Nâng cao", left_text + 52, 330, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Tương thích trình duyệt và các ứng dụng", left_text + 52, 354, ARGB_TEXT_MUTED, false);
+        draw_gdip_text(graphics, font_bold, "Nâng cao", left_text + 52, 370 - sy, ARGB_TEXT_PRIMARY, false);
+        draw_gdip_text(graphics, font_desc, "Tương thích trình duyệt và các ứng dụng", left_text + 52, 394 - sy, ARGB_TEXT_MUTED, false);
         let arrow_adv_color = if hover_id == 15 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 351, arrow_adv_color);
+        draw_vector_chevron_right(graphics, right_ctrl - 12, 391 - sy, arrow_adv_color);
 
-        // 7. Menu item 4: Cài đặt HoyuKey (y = 388..450, h = 62)
+        // 7. Menu item 4: Cài đặt HoyuKey (y = 434..496, h = 62)
         let menu3_bg = if hover_id == 12 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 388, card_w, 62, 10, menu3_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 399, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_sliders_icon(graphics, left_text + 20, 419, ARGB_TEXT_PRIMARY);
+        gdiplus_draw_rounded_card(graphics, card_x, 434 - sy, card_w, 62, 10, menu3_bg, ARGB_CARD_BORDER, 1.0);
+        gdiplus_draw_rounded_card(graphics, left_text, 445 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+        draw_vector_sliders_icon(graphics, left_text + 20, 465 - sy, ARGB_TEXT_PRIMARY);
 
-        draw_gdip_text(graphics, font_bold, "Cài đặt HoyuKey", left_text + 52, 398, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Phím tắt chuyển đổi, khởi động cùng máy", left_text + 52, 422, ARGB_TEXT_MUTED, false);
+        draw_gdip_text(graphics, font_bold, "Cài đặt HoyuKey", left_text + 52, 444 - sy, ARGB_TEXT_PRIMARY, false);
+        draw_gdip_text(graphics, font_desc, "Phím tắt chuyển đổi, khởi động cùng máy", left_text + 52, 468 - sy, ARGB_TEXT_MUTED, false);
         let arrow3_color = if hover_id == 12 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 419, arrow3_color);
+        draw_vector_chevron_right(graphics, right_ctrl - 12, 465 - sy, arrow3_color);
 
-        // 8. Menu item 5: Giới thiệu (y = 456..518, h = 62)
+        // 8. Menu item 5: Giới thiệu (y = 508..570, h = 62)
         let menu4_bg = if hover_id == 13 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 456, card_w, 62, 10, menu4_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 467, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_info_icon(graphics, left_text + 20, 487, ARGB_TEXT_PRIMARY);
+        gdiplus_draw_rounded_card(graphics, card_x, 508 - sy, card_w, 62, 10, menu4_bg, ARGB_CARD_BORDER, 1.0);
+        gdiplus_draw_rounded_card(graphics, left_text, 519 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+        draw_vector_info_icon(graphics, left_text + 20, 539 - sy, ARGB_TEXT_PRIMARY);
 
-        draw_gdip_text(graphics, font_bold, "Giới thiệu", left_text + 52, 466, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Phiên bản, kiểm tra cập nhật và nhật ký", left_text + 52, 490, ARGB_TEXT_MUTED, false);
+        draw_gdip_text(graphics, font_bold, "Giới thiệu", left_text + 52, 518 - sy, ARGB_TEXT_PRIMARY, false);
+        draw_gdip_text(graphics, font_desc, "Phiên bản, kiểm tra cập nhật và nhật ký", left_text + 52, 542 - sy, ARGB_TEXT_MUTED, false);
         let arrow4_color = if hover_id == 13 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 487, arrow4_color);
+        draw_vector_chevron_right(graphics, right_ctrl - 12, 539 - sy, arrow4_color);
 
     } else {
         // ========================================================
@@ -1541,29 +1618,29 @@ unsafe fn render_page_elements(
             let anim_p = BROWSER_INPUT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
 
-            // Chiều cao card co giãn mượt mà giữa 76px (khi tắt) và 186px (khi bật):
-            let card_h = (76.0 + 110.0 * anim_ease).round() as i32;
+            // Chiều cao card co giãn mượt mà: khi tắt là 68px, khi bật mở rộng thêm 64px thành 132px (không còn cằm thừa!)
+            let card_h = (68.0 + 64.0 * anim_ease).round() as i32;
             gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, card_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Tương thích trình duyệt
-            draw_gdip_text(graphics, font_bold, "Tương thích trình duyệt", left_text, 100, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Khắc phục lỗi gõ trên thanh địa chỉ và gợi ý trình duyệt", left_text, 124, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Tương thích trình duyệt", left_text, 98, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Khắc phục lỗi gõ trên thanh địa chỉ và gợi ý trình duyệt", left_text, 122, ARGB_TEXT_MUTED, false);
             let compat_p = BROWSER_COMPAT_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 106, compat_p);
+            draw_animated_switch(graphics, right_ctrl - 50, 104, compat_p);
 
             // Ô text box xuất hiện với animation mượt mà (fade in/out + slide down/up)
             if anim_ease > 0.02 {
                 let alpha_u8 = (255.0 * anim_ease).clamp(0.0, 255.0) as u32;
                 let divider_color = (alpha_u8 << 24) | (ARGB_DIVIDER & 0x00FFFFFF);
-                gdiplus_draw_line(graphics, left_text, 154, right_ctrl, 154, divider_color, 1.0);
+                gdiplus_draw_line(graphics, left_text, 146, right_ctrl, 146, divider_color, 1.0);
 
                 let is_focused = BROWSER_INPUT_FOCUSED.load(Ordering::SeqCst);
                 let box_border = if is_focused { ARGB_WHITE } else { ARGB_CARD_BORDER };
                 let box_border_color = (alpha_u8 << 24) | (box_border & 0x00FFFFFF);
                 let box_bg_color = (alpha_u8 << 24) | (ARGB_PILL_TRACK & 0x00FFFFFF);
-                let box_y = 168;
+                let box_y = 158;
                 let box_w = card_w - 40;
-                let box_h = 40;
+                let box_h = 42;
 
                 gdiplus_draw_rounded_card(graphics, left_text, box_y, box_w, box_h, 6, box_bg_color, box_border_color, 1.0);
 
@@ -1596,24 +1673,49 @@ unsafe fn draw_vector_gear_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, col
 
     let mut pen: *mut GpPen = null_mut();
     GdipCreatePen1(color_argb, 1.6, UnitPixel, &mut pen);
+    if pen.is_null() {
+        return;
+    }
     GdipSetPenStartCap(pen, LineCapRound);
     GdipSetPenEndCap(pen, LineCapRound);
+    GdipSetPenLineJoin(pen, LineJoinRound);
 
-    // Vòng tròn trung tâm
-    GdipDrawEllipse(graphics, pen, fx - 4.5, fy - 4.5, 9.0, 9.0);
+    // 1. Lỗ trục tròn ở tâm
+    GdipDrawEllipse(graphics, pen, fx - 3.2, fy - 3.2, 6.4, 6.4);
 
-    // 6 răng bánh răng xung quanh
+    // 2. Vành bánh răng ngoài với 6 răng khối dập nổi Lucide chuẩn
+    let mut gear_path: *mut GpPath = null_mut();
+    GdipCreatePath(FillModeAlternate, &mut gear_path);
+
+    let r_inner = 6.0;
+    let r_outer = 9.2;
+    let tooth_half = 14.0 * std::f32::consts::PI / 180.0;
+    let gap_half = 16.0 * std::f32::consts::PI / 180.0;
+
     for i in 0..6 {
-        let angle = (i as f32) * std::f32::consts::PI / 3.0;
-        let r1 = 6.0;
-        let r2 = 9.0;
-        let x1 = fx + r1 * angle.cos();
-        let y1 = fy + r1 * angle.sin();
-        let x2 = fx + r2 * angle.cos();
-        let y2 = fy + r2 * angle.sin();
-        GdipDrawLine(graphics, pen, x1, y1, x2, y2);
-    }
+        let ca = (i as f32) * (std::f32::consts::PI / 3.0);
+        let a1 = ca - tooth_half;
+        let a2 = ca + tooth_half;
+        let a3 = ca + (std::f32::consts::PI / 6.0) - (gap_half / 2.0);
+        let a4 = ca + (std::f32::consts::PI / 6.0) + (gap_half / 2.0);
 
+        let p1_x = fx + r_outer * a1.cos();
+        let p1_y = fy + r_outer * a1.sin();
+        let p2_x = fx + r_outer * a2.cos();
+        let p2_y = fy + r_outer * a2.sin();
+        let p3_x = fx + r_inner * a3.cos();
+        let p3_y = fy + r_inner * a3.sin();
+        let p4_x = fx + r_inner * a4.cos();
+        let p4_y = fy + r_inner * a4.sin();
+
+        GdipAddPathLine(gear_path, p1_x, p1_y, p2_x, p2_y);
+        GdipAddPathLine(gear_path, p2_x, p2_y, p3_x, p3_y);
+        GdipAddPathLine(gear_path, p3_x, p3_y, p4_x, p4_y);
+    }
+    GdipClosePathFigure(gear_path);
+    GdipDrawPath(graphics, pen, gear_path);
+
+    GdipDeletePath(gear_path);
     GdipDeletePen(pen);
 }
 
