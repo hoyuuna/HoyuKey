@@ -1,15 +1,16 @@
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU16, Ordering};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD, KEYBDINPUT,
-    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE,
-    VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN,
-    VK_SHIFT, VK_TAB, VK_UP,
+    GetKeyState, GetKeyboardState, MapVirtualKeyW, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD,
+    KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK, VK_CONTROL, VK_DOWN, VK_END,
+    VK_ESCAPE, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT,
+    VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK,
-    KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+    CallNextHookEx, GetForegroundWindow, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+    HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::config::SwitchKey;
@@ -19,33 +20,71 @@ use crate::GLOBAL_STATE;
 
 pub const HOYU_MAGIC_EXTRA_INFO: usize = 0x484F5955; // 'HOYU'
 
-static HOOK_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
+static KBD_HOOK_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
+static MOUSE_HOOK_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
+
+// Lưu phím vừa bị chặn KeyDown để chặn luôn KeyUp tương ứng, tránh desync phím trên trình duyệt
+static LAST_BLOCKED_VK: AtomicU16 = AtomicU16::new(0);
+
+// Theo dõi cửa sổ đang active (foreground), đổi cửa sổ -> tự động reset buffer
+static LAST_FOREGROUND_WINDOW: AtomicIsize = AtomicIsize::new(0);
 
 pub fn install_hook() -> bool {
     unsafe {
-        let hook = SetWindowsHookExW(
+        let kbd_hook = SetWindowsHookExW(
             WH_KEYBOARD_LL,
             Some(low_level_keyboard_proc),
             null_mut(),
             0,
         );
 
-        if hook != null_mut() {
-            HOOK_HANDLE.store(hook as _, Ordering::SeqCst);
-            true
-        } else {
-            false
+        let mouse_hook = SetWindowsHookExW(
+            WH_MOUSE_LL,
+            Some(low_level_mouse_proc),
+            null_mut(),
+            0,
+        );
+
+        if kbd_hook != null_mut() {
+            KBD_HOOK_HANDLE.store(kbd_hook as _, Ordering::SeqCst);
         }
+        if mouse_hook != null_mut() {
+            MOUSE_HOOK_HANDLE.store(mouse_hook as _, Ordering::SeqCst);
+        }
+
+        kbd_hook != null_mut()
     }
 }
 
 pub fn uninstall_hook() {
-    let hook = HOOK_HANDLE.swap(null_mut(), Ordering::SeqCst) as HHOOK;
-    if hook != null_mut() {
+    let kbd = KBD_HOOK_HANDLE.swap(null_mut(), Ordering::SeqCst) as HHOOK;
+    if kbd != null_mut() {
         unsafe {
-            UnhookWindowsHookEx(hook);
+            UnhookWindowsHookEx(kbd);
         }
     }
+
+    let mouse = MOUSE_HOOK_HANDLE.swap(null_mut(), Ordering::SeqCst) as HHOOK;
+    if mouse != null_mut() {
+        unsafe {
+            UnhookWindowsHookEx(mouse);
+        }
+    }
+}
+
+unsafe extern "system" fn low_level_mouse_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if code >= 0 {
+        let msg = wparam as u32;
+        if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
+            // Người dùng click chuột ra vị trí khác -> kết thúc từ cũ ngay lập tức
+            reset_engine();
+        }
+    }
+    CallNextHookEx(null_mut(), code, wparam, lparam)
 }
 
 unsafe extern "system" fn low_level_keyboard_proc(
@@ -64,11 +103,24 @@ unsafe extern "system" fn low_level_keyboard_proc(
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
-    let is_down = (wparam as u32 == WM_KEYDOWN) || (wparam as u32 == WM_SYSKEYDOWN);
+    // 2. Tự động kiểm tra thay đổi cửa sổ làm việc (chuyển tab trình duyệt, chuyển app)
+    let current_fg = GetForegroundWindow() as isize;
+    let prev_fg = LAST_FOREGROUND_WINDOW.swap(current_fg, Ordering::SeqCst);
+    if prev_fg != 0 && prev_fg != current_fg {
+        reset_engine();
+    }
 
-    // 2. Kiểm tra phím tắt chuyển đổi chế độ V / E (Ctrl+Shift hoặc Alt+Z)
-    if is_down && check_hotkey(kbd.vkCode as u16) {
-        toggle_vietnamese_mode();
+    let is_down = (wparam as u32 == WM_KEYDOWN) || (wparam as u32 == WM_SYSKEYDOWN);
+    let is_up = (wparam as u32 == WM_KEYUP) || (wparam as u32 == WM_SYSKEYUP);
+
+    // 3. Nếu là sự kiện KeyUp của phím mà KeyDown trước đó đã bị bộ gõ chặn:
+    // Chặn luôn KeyUp này để trình duyệt (Chrome, Edge...) không bị desync trạng thái phím!
+    if is_up {
+        let blocked_vk = LAST_BLOCKED_VK.load(Ordering::SeqCst);
+        if blocked_vk != 0 && blocked_vk == kbd.vkCode as u16 {
+            LAST_BLOCKED_VK.store(0, Ordering::SeqCst);
+            return 1;
+        }
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
@@ -76,7 +128,13 @@ unsafe extern "system" fn low_level_keyboard_proc(
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
-    // 3. Nếu đang giữ Ctrl, Alt hoặc Windows -> đây là phím tắt của app khác (Ctrl+C, Alt+F4...),
+    // 4. Kiểm tra phím tắt chuyển đổi chế độ V / E (Ctrl+Shift hoặc Alt+Z)
+    if check_hotkey(kbd.vkCode as u16) {
+        toggle_vietnamese_mode();
+        return CallNextHookEx(null_mut(), code, wparam, lparam);
+    }
+
+    // 5. Nếu đang giữ Ctrl, Alt hoặc Windows -> phím tắt app khác (Ctrl+C, Ctrl+A, Alt+Tab...),
     // xóa buffer từ hiện tại và cho phím đi qua tự nhiên
     let ctrl_pressed = (GetKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
     let alt_pressed = (GetKeyState(VK_MENU as i32) as u16 & 0x8000) != 0;
@@ -88,7 +146,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
-    // 4. Xử lý Backspace & các phím điều hướng ngắt từ
+    // 6. Xử lý Backspace & các phím điều hướng ngắt từ
     match kbd.vkCode as u16 {
         VK_BACK => {
             let mut state = GLOBAL_STATE.lock().unwrap();
@@ -96,8 +154,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
             drop(state);
 
             if let Some(KeyAction::Transform { backspaces, text }) = bs_action {
-                send_backspaces(backspaces);
-                send_unicode_str(&text);
+                send_transform_batch(backspaces, &text);
                 return 1;
             } else {
                 return CallNextHookEx(null_mut(), code, wparam, lparam);
@@ -111,7 +168,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
         _ => {}
     }
 
-    // 5. Chuyển đổi mã phím thành ký tự Unicode
+    // 7. Chuyển đổi mã phím thành ký tự Unicode
     if let Some(ch) = vk_to_char(kbd.vkCode, kbd.scanCode) {
         let action = {
             let mut state = GLOBAL_STATE.lock().unwrap();
@@ -121,11 +178,10 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
         match action {
             KeyAction::Transform { backspaces, text } => {
-                // Xóa ký tự cũ trên màn hình
-                send_backspaces(backspaces);
-                // Gõ từ tiếng Việt mới
-                send_unicode_str(&text);
-                // Chặn phím gốc để không bị lặp chữ
+                // Ghi nhận phím này bị chặn để chặn luôn KeyUp của nó
+                LAST_BLOCKED_VK.store(kbd.vkCode as u16, Ordering::SeqCst);
+                // Gửi toàn bộ Backspace và chuỗi Unicode mới trong MỘT lượt SendInput duy nhất
+                send_transform_batch(backspaces, &text);
                 return 1;
             }
             KeyAction::PassThrough | KeyAction::Reset | KeyAction::Backspace => {
@@ -181,9 +237,7 @@ fn reset_engine() {
 fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
     unsafe {
         let mut key_state = [0u8; 256];
-        if GetKeyboardState(key_state.as_mut_ptr()) == 0 {
-            return None;
-        }
+        GetKeyboardState(key_state.as_mut_ptr());
 
         let mut utf16_buf = [0u16; 8];
         let len = ToUnicode(
@@ -205,71 +259,62 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
     }
 }
 
-unsafe fn send_backspaces(count: usize) {
-    if count == 0 {
-        return;
-    }
+/// Gửi nguyên tử (Atomic) toàn bộ chuỗi Backspace và Unicode Text trong 1 lần SendInput duy nhất.
+/// Thiết lập scan code chuẩn cho Backspace (0x0E) để mọi trình duyệt (Chrome, Edge...) nhận diện tức thì.
+unsafe fn send_transform_batch(backspaces: usize, text: &str) {
+    let backspace_scan = MapVirtualKeyW(VK_BACK as u32, 0) as u16;
+    let mut inputs = Vec::with_capacity(backspaces * 2 + text.encode_utf16().count() * 2);
 
-    let mut inputs = Vec::with_capacity(count * 2);
-    for _ in 0..count {
-        // Key down
-        let mut input_down: INPUT = std::mem::zeroed();
-        input_down.r#type = INPUT_KEYBOARD;
-        input_down.Anonymous.ki = KEYBDINPUT {
+    for _ in 0..backspaces {
+        // Backspace Down
+        let mut down: INPUT = std::mem::zeroed();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT {
             wVk: VK_BACK,
-            wScan: 0,
+            wScan: backspace_scan,
             dwFlags: 0,
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
-        inputs.push(input_down);
+        inputs.push(down);
 
-        // Key up
-        let mut input_up: INPUT = std::mem::zeroed();
-        input_up.r#type = INPUT_KEYBOARD;
-        input_up.Anonymous.ki = KEYBDINPUT {
+        // Backspace Up
+        let mut up: INPUT = std::mem::zeroed();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT {
             wVk: VK_BACK,
-            wScan: 0,
+            wScan: backspace_scan,
             dwFlags: KEYEVENTF_KEYUP,
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
-        inputs.push(input_up);
+        inputs.push(up);
     }
 
-    SendInput(
-        inputs.len() as u32,
-        inputs.as_ptr(),
-        std::mem::size_of::<INPUT>() as i32,
-    );
-}
-
-unsafe fn send_unicode_str(s: &str) {
-    let mut inputs = Vec::new();
-    for c in s.encode_utf16() {
-        // Key down
-        let mut input_down: INPUT = std::mem::zeroed();
-        input_down.r#type = INPUT_KEYBOARD;
-        input_down.Anonymous.ki = KEYBDINPUT {
+    for c in text.encode_utf16() {
+        // Unicode Char Down
+        let mut down: INPUT = std::mem::zeroed();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT {
             wVk: 0,
             wScan: c,
             dwFlags: KEYEVENTF_UNICODE,
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
-        inputs.push(input_down);
+        inputs.push(down);
 
-        // Key up
-        let mut input_up: INPUT = std::mem::zeroed();
-        input_up.r#type = INPUT_KEYBOARD;
-        input_up.Anonymous.ki = KEYBDINPUT {
+        // Unicode Char Up
+        let mut up: INPUT = std::mem::zeroed();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT {
             wVk: 0,
             wScan: c,
             dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
-        inputs.push(input_up);
+        inputs.push(up);
     }
 
     if !inputs.is_empty() {

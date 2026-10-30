@@ -20,40 +20,34 @@ pub enum KeyAction {
     Backspace,
 }
 
-#[derive(Debug, Clone)]
-struct HistoryToken {
-    word: String,
-    _separator: Option<char>,
-}
-
 pub struct Engine {
     current_word: String,
-    history: Vec<HistoryToken>,
+    last_word_before_space: Option<String>,
 }
 
 impl Engine {
     pub fn new() -> Self {
         Self {
             current_word: String::new(),
-            history: Vec::new(),
+            last_word_before_space: None,
         }
     }
 
     pub fn reset(&mut self) {
         self.current_word.clear();
-        self.history.clear();
+        self.last_word_before_space = None;
     }
 
     /// Xử lý phím Backspace thông minh:
-    /// 1. Nếu buffer từ hiện tại rỗng nhưng có từ vừa nhập trước đó (ví dụ gõ "dụ" rồi space, giờ lùi lại),
-    ///    khôi phục ngay từ trước đó để người dùng sửa dấu/ký tự liền mạch.
+    /// 1. Nếu buffer từ hiện tại rỗng nhưng có từ vừa nhập trước đó (người dùng vừa gõ xong từ rồi gõ space),
+    ///    lùi lại sẽ khôi phục ngay từ trước đó để người dùng sửa dấu/ký tự liền mạch.
     /// 2. Nếu từ hiện tại đang có dấu thanh (ví dụ "quảng" hoặc "dụ"), Backspace sẽ gỡ bỏ dấu thanh trước (trở về "quang", "du")
     ///    để người dùng có thể gõ ngay phím dấu khác (như 'x' thành "quãng", "dũ") như trên bàn phím điện thoại!
     pub fn handle_backspace(&mut self) -> Option<KeyAction> {
-        // Nếu từ hiện tại rỗng, kiểm tra xem có từ trong lịch sử vừa phân cách bằng space không
+        // Nếu từ hiện tại rỗng, kiểm tra xem có từ vừa kết thúc bằng space không
         if self.current_word.is_empty() {
-            if let Some(token) = self.history.pop() {
-                self.current_word = token.word;
+            if let Some(word) = self.last_word_before_space.take() {
+                self.current_word = word;
             }
             return None;
         }
@@ -102,16 +96,15 @@ impl Engine {
         // Nếu là phím khoảng trắng, ngắt dòng hoặc ký tự phân cách từ
         if c.is_whitespace() || is_word_boundary(c) {
             if !self.current_word.is_empty() {
-                self.history.push(HistoryToken {
-                    word: self.current_word.clone(),
-                    _separator: Some(c),
-                });
-                if self.history.len() > 30 {
-                    self.history.remove(0);
-                }
+                self.last_word_before_space = Some(self.current_word.clone());
                 self.current_word.clear();
             }
             return KeyAction::PassThrough;
+        }
+
+        // Bắt đầu một từ mới hoặc gõ tiếp: hủy last_word_before_space để tránh nhiễm từ cũ
+        if self.current_word.is_empty() {
+            self.last_word_before_space = None;
         }
 
         if self.current_word.len() > 30 {
@@ -328,6 +321,31 @@ mod tests {
             }
         );
         assert_eq!(engine.current_word, "dũ");
+    }
+
+    #[test]
+    fn test_telex_no_bleed_from_previous_word() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "trc "
+        for ch in "trc ".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "");
+
+        // Gõ "aar" -> phải ra "ả" độc lập (chứ không bị dính thành "trcả")
+        engine.process_char('a', &config);
+        engine.process_char('a', &config);
+        let action = engine.process_char('r', &config);
+        assert_eq!(
+            action,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "ả".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "ả");
     }
 
     #[test]

@@ -2,8 +2,9 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicUsize, Ordering};
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-    EndPaint, InvalidateRect, ScreenToClient, SelectObject, PAINTSTRUCT, SRCCOPY,
+    AddFontMemResourceEx, AddFontResourceExW, BeginPaint, BitBlt, CreateCompatibleBitmap,
+    CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint, InvalidateRect, ScreenToClient,
+    SelectObject, PAINTSTRUCT, SRCCOPY,
 };
 use windows_sys::Win32::Graphics::GdiPlus::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -32,6 +33,10 @@ static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
 
+// Nhúng trực tiếp font Google Sans vào file binary để chạy độc lập mọi nơi
+const FONT_GOOGLE_SANS_REGULAR: &[u8] = include_bytes!("../fonts/GoogleSans-Regular.ttf");
+const FONT_GOOGLE_SANS_BOLD: &[u8] = include_bytes!("../fonts/GoogleSans-Bold.ttf");
+
 // Nhúng logo Premultiplied ARGB chuẩn màu
 const LOGO_BGRA_128: &[u8] = include_bytes!("../icon/logo_128.bin");
 const LOGO_BGRA_32: &[u8] = include_bytes!("../icon/logo_32.bin");
@@ -53,6 +58,7 @@ const ARGB_DANGER_BORDER: u32 = 0xFF3F1D1D;   // #3f1d1d
 
 pub fn init_ui_subsystems() {
     unsafe {
+        // 1. Khởi tạo GDI+
         let mut token: usize = 0;
         let input = GdiplusStartupInput {
             GdiplusVersion: 1,
@@ -63,6 +69,27 @@ pub fn init_ui_subsystems() {
         if GdiplusStartup(&mut token, &input, null_mut()) == 0 {
             GDIP_TOKEN.store(token, Ordering::SeqCst);
         }
+
+        // 2. Nạp font Google Sans trực tiếp từ bộ nhớ (độc lập, không cần cài đặt)
+        let mut c_fonts: u32 = 0;
+        AddFontMemResourceEx(
+            FONT_GOOGLE_SANS_REGULAR.as_ptr() as _,
+            FONT_GOOGLE_SANS_REGULAR.len() as u32,
+            null_mut(),
+            &mut c_fonts,
+        );
+        AddFontMemResourceEx(
+            FONT_GOOGLE_SANS_BOLD.as_ptr() as _,
+            FONT_GOOGLE_SANS_BOLD.len() as u32,
+            null_mut(),
+            &mut c_fonts,
+        );
+
+        // Nạp thêm từ file thư mục fonts nếu có sẵn
+        let p1 = to_wide("fonts\\GoogleSans-Regular.ttf");
+        let p2 = to_wide("fonts\\GoogleSans-Bold.ttf");
+        AddFontResourceExW(p1.as_ptr(), 0x10, null_mut());
+        AddFontResourceExW(p2.as_ptr(), 0x10, null_mut());
     }
 }
 
@@ -304,39 +331,39 @@ fn get_layout_metrics(w: i32) -> (i32, i32, i32, i32, i32, i32) {
     let card_w = w - (margin_x * 2);
     let card_x = margin_x;
     let card_right = card_x + card_w;
-    let right_ctrl = card_right - 18;
-    let left_text = card_x + 18;
+    let right_ctrl = card_right - 20;
+    let left_text = card_x + 20;
     (card_x, card_w, card_right, right_ctrl, left_text, margin_x)
 }
 
 fn is_clickable_area(x: i32, y: i32, client_w: i32) -> bool {
     let (card_x, _, card_right, right_ctrl, _, _) = get_layout_metrics(client_w);
 
-    // 1. Tab Kiểu gõ (Telex / VNI): tab_w = 90 -> total = 188
-    let tab_x = right_ctrl - 188;
-    if x >= tab_x && x <= right_ctrl && y >= 100 && y <= 146 {
+    // 1. Tab Kiểu gõ (Telex / VNI): tab_w = 96 -> total = 200
+    let tab_x = right_ctrl - 200;
+    if x >= tab_x && x <= right_ctrl && y >= 98 && y <= 150 {
         return true;
     }
-    // 2. Switch Bỏ dấu kiểu mới: w = 48
-    let sw_x = right_ctrl - 48;
-    if x >= sw_x && x <= right_ctrl && y >= 198 && y <= 234 {
+    // 2. Switch Bỏ dấu kiểu mới: w = 50
+    let sw_x = right_ctrl - 50;
+    if x >= sw_x && x <= right_ctrl && y >= 200 && y <= 242 {
         return true;
     }
-    // 3. Switch Tự động khôi phục phím: w = 48
-    if x >= sw_x && x <= right_ctrl && y >= 270 && y <= 306 {
+    // 3. Switch Tự động khôi phục phím: w = 50
+    if x >= sw_x && x <= right_ctrl && y >= 272 && y <= 314 {
         return true;
     }
-    // 4. Tab Phím tắt (Ctrl+Shift / Alt+Z): tab_w = 98 -> total = 204
-    let sw_tab_x = right_ctrl - 204;
-    if x >= sw_tab_x && x <= right_ctrl && y >= 348 && y <= 394 {
+    // 4. Tab Phím tắt (Ctrl+Shift / Alt+Z): tab_w = 104 -> total = 216
+    let sw_tab_x = right_ctrl - 216;
+    if x >= sw_tab_x && x <= right_ctrl && y >= 352 && y <= 404 {
         return true;
     }
     // 5. Nút Thoát HoyuKey: mép trái card_x, w = 140
-    if x >= card_x && x <= card_x + 140 && y >= 530 && y <= 572 {
+    if x >= card_x && x <= card_x + 140 && y >= 530 && y <= 574 {
         return true;
     }
     // 6. Nút Đóng: mép phải card_right, w = 160
-    if x >= card_right - 160 && x <= card_right && y >= 530 && y <= 572 {
+    if x >= card_right - 160 && x <= card_right && y >= 530 && y <= 574 {
         return true;
     }
     false
@@ -348,15 +375,15 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
     let mut state = GLOBAL_STATE.lock().unwrap();
     let mut changed = false;
 
-    // 1. Click Tab Kiểu gõ (Telex / VNI)
-    let tab_x = right_ctrl - 188;
-    if y >= 100 && y <= 146 {
-        if x >= tab_x && x <= tab_x + 90 {
+    // 1. Click Tab Kiểu gõ (Telex / VNI): tab_w = 96 -> total = 200
+    let tab_x = right_ctrl - 200;
+    if y >= 98 && y <= 150 {
+        if x >= tab_x && x <= tab_x + 96 {
             if state.config.input_method != InputMethod::Telex {
                 state.config.input_method = InputMethod::Telex;
                 changed = true;
             }
-        } else if x >= tab_x + 98 && x <= right_ctrl {
+        } else if x >= tab_x + 104 && x <= right_ctrl {
             if state.config.input_method != InputMethod::Vni {
                 state.config.input_method = InputMethod::Vni;
                 changed = true;
@@ -365,27 +392,27 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
     }
 
     // 2. Click Switch Bỏ dấu kiểu mới
-    let sw_x = right_ctrl - 48;
-    if x >= sw_x && x <= right_ctrl && y >= 198 && y <= 234 {
+    let sw_x = right_ctrl - 50;
+    if x >= sw_x && x <= right_ctrl && y >= 200 && y <= 242 {
         state.config.modern_tone = !state.config.modern_tone;
         changed = true;
     }
 
     // 3. Click Switch Tự động khôi phục phím
-    if x >= sw_x && x <= right_ctrl && y >= 270 && y <= 306 {
+    if x >= sw_x && x <= right_ctrl && y >= 272 && y <= 314 {
         state.config.auto_restore = !state.config.auto_restore;
         changed = true;
     }
 
-    // 4. Click Tab Phím tắt (Ctrl+Shift / Alt+Z)
-    let sw_tab_x = right_ctrl - 204;
-    if y >= 348 && y <= 394 {
-        if x >= sw_tab_x && x <= sw_tab_x + 98 {
+    // 4. Click Tab Phím tắt (Ctrl+Shift / Alt+Z): tab_w = 104 -> total = 216
+    let sw_tab_x = right_ctrl - 216;
+    if y >= 352 && y <= 404 {
+        if x >= sw_tab_x && x <= sw_tab_x + 104 {
             if state.config.switch_key != SwitchKey::CtrlShift {
                 state.config.switch_key = SwitchKey::CtrlShift;
                 changed = true;
             }
-        } else if x >= sw_tab_x + 106 && x <= right_ctrl {
+        } else if x >= sw_tab_x + 112 && x <= right_ctrl {
             if state.config.switch_key != SwitchKey::AltZ {
                 state.config.switch_key = SwitchKey::AltZ;
                 changed = true;
@@ -394,7 +421,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
     }
 
     // 5. Nút Thoát HoyuKey
-    if x >= card_x && x <= card_x + 140 && y >= 530 && y <= 572 {
+    if x >= card_x && x <= card_x + 140 && y >= 530 && y <= 574 {
         drop(state);
         unsafe {
             PostQuitMessage(0);
@@ -403,7 +430,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
     }
 
     // 6. Nút Đóng (Ẩn về khay)
-    if x >= card_right - 160 && x <= card_right && y >= 530 && y <= 572 {
+    if x >= card_right - 160 && x <= card_right && y >= 530 && y <= 574 {
         drop(state);
         unsafe {
             ShowWindow(hwnd, SW_HIDE);
@@ -431,7 +458,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
         return;
     }
 
-    // Thiết lập kết xuất siêu mượt: Anti-Aliasing, Bicubic Interpolation, ClearType Text
+    // Thiết lập kết xuất đồ họa: Anti-Aliasing, Bicubic Interpolation, ClearType Text
     GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
     GdipSetInterpolationMode(graphics, InterpolationModeHighQualityBicubic);
     GdipSetPixelOffsetMode(graphics, PixelOffsetModeHighQuality);
@@ -450,116 +477,118 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     GdipDeletePath(bg_path);
     GdipDeleteBrush(bg_brush as *mut GpBrush);
 
-    // Font Family Segoe UI hiện đại
+    // Font Family Google Sans hiện đại, hình học bo tròn mềm mại
     let mut family: *mut GpFontFamily = null_mut();
-    let family_name = to_wide("Segoe UI Variable Text");
+    let family_name = to_wide("Google Sans");
     GdipCreateFontFamilyFromName(family_name.as_ptr(), null_mut(), &mut family);
     if family.is_null() {
-        let fallback = to_wide("Segoe UI");
+        let fallback = to_wide("Segoe UI Variable Text");
         GdipCreateFontFamilyFromName(fallback.as_ptr(), null_mut(), &mut family);
     }
+    if family.is_null() {
+        let fallback2 = to_wide("Segoe UI");
+        GdipCreateFontFamilyFromName(fallback2.as_ptr(), null_mut(), &mut family);
+    }
 
-    let font_title = create_gdip_font(family, 19.0, FontStyleBold);
-    let font_bold = create_gdip_font(family, 12.5, FontStyleBold);
-    let font_body = create_gdip_font(family, 11.5, FontStyleRegular);
-    let font_desc = create_gdip_font(family, 10.5, FontStyleRegular);
-    let font_badge = create_gdip_font(family, 9.5, FontStyleBold);
+    // Typography to rõ, chuẩn mắt nhìn 4K & High-DPI
+    let font_title = create_gdip_font(family, 24.0, FontStyleBold);
+    let font_bold = create_gdip_font(family, 15.0, FontStyleBold);
+    let font_desc = create_gdip_font(family, 12.5, FontStyleRegular);
+    let font_tab = create_gdip_font(family, 14.0, FontStyleBold);
+    let font_btn = create_gdip_font(family, 14.0, FontStyleBold);
 
-    // Tính toán lưới căn chỉnh đối xứng hoàn hảo hai bên
+    // Lưới căn chỉnh đối xứng hoàn hảo hai bên
     let (card_x, card_w, card_right, right_ctrl, left_text, _) = get_layout_metrics(w);
 
-    // 1. Header: Logo HK 48x48 siêu sắc nét + Tiêu đề
-    gdiplus_draw_image(graphics, card_x, 22, 48, 48, LOGO_BGRA_128, 128, 128);
+    // 1. Header: Logo HK to rõ 52x52 + Tiêu đề lớn (đã bỏ badge pre-release)
+    gdiplus_draw_image(graphics, card_x, 20, 52, 52, LOGO_BGRA_128, 128, 128);
 
-    draw_gdip_text(graphics, font_title, "HoyuKey", card_x + 60, 21, ARGB_TEXT_PRIMARY, false);
+    draw_gdip_text(graphics, font_title, "HoyuKey", card_x + 66, 17, ARGB_TEXT_PRIMARY, false);
+    draw_gdip_text(graphics, font_desc, "Bộ gõ Tiếng Việt thế hệ mới cho PC", card_x + 66, 48, ARGB_TEXT_MUTED, false);
 
-    // Badge Pre-release
-    gdiplus_draw_rounded_card(graphics, card_x + 160, 26, 84, 20, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-    draw_gdip_text_centered(graphics, font_badge, "Pre-release", card_x + 160, 26, 84, 20, ARGB_TEXT_MUTED);
-
-    draw_gdip_text(graphics, font_desc, "Bộ gõ Tiếng Việt thế hệ mới cho PC", card_x + 60, 48, ARGB_TEXT_MUTED, false);
-
-    // 2. Card 1: Kiểu gõ chính (Telex / VNI)
-    gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-    draw_gdip_text(graphics, font_bold, "Kiểu gõ chính", left_text, 102, ARGB_TEXT_PRIMARY, false);
-    draw_gdip_text(graphics, font_desc, "Chọn phương thức gõ Telex hoặc VNI", left_text, 124, ARGB_TEXT_MUTED, false);
+    // 2. Card 1: Kiểu gõ chính (Telex / VNI) - chiều cao 82px
+    gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 82, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+    draw_gdip_text(graphics, font_bold, "Kiểu gõ chính", left_text, 103, ARGB_TEXT_PRIMARY, false);
+    draw_gdip_text(graphics, font_desc, "Chọn phương thức gõ Telex hoặc VNI", left_text, 128, ARGB_TEXT_MUTED, false);
 
     let method_progress = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
     draw_animated_tabs(
         graphics,
-        right_ctrl - 188,
-        102,
+        right_ctrl - 200,
+        105,
         &["Telex", "VNI"],
-        90,
+        96,
+        38,
         method_progress,
-        font_bold,
+        font_tab,
     );
 
-    // 3. Card 2: Tùy chọn gõ dấu
-    gdiplus_draw_rounded_card(graphics, card_x, 174, card_w, 148, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+    // 3. Card 2: Tùy chọn gõ dấu - chiều cao 158px
+    gdiplus_draw_rounded_card(graphics, card_x, 180, card_w, 158, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
     // Row 1: Bỏ dấu kiểu mới
-    draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 192, ARGB_TEXT_PRIMARY, false);
-    draw_gdip_text(graphics, font_desc, "Đặt dấu ở âm thứ hai: hóa, hòa thay vì hoá, hoà", left_text, 214, ARGB_TEXT_MUTED, false);
+    draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 196, ARGB_TEXT_PRIMARY, false);
+    draw_gdip_text(graphics, font_desc, "Đặt dấu ở âm thứ hai: hóa, hòa thay vì hoá, hoà", left_text, 221, ARGB_TEXT_MUTED, false);
 
     let tone_progress = MODERN_TONE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-    draw_animated_switch(graphics, right_ctrl - 48, 202, tone_progress);
+    draw_animated_switch(graphics, right_ctrl - 50, 206, tone_progress);
 
     // Đường phân cách căn chuẩn từ left_text đến right_ctrl
-    gdiplus_draw_line(graphics, left_text, 248, right_ctrl, 248, ARGB_DIVIDER, 1.0);
+    gdiplus_draw_line(graphics, left_text, 258, right_ctrl, 258, ARGB_DIVIDER, 1.0);
 
     // Row 2: Tự động khôi phục phím
-    draw_gdip_text(graphics, font_bold, "Tự động khôi phục phím", left_text, 264, ARGB_TEXT_PRIMARY, false);
-    draw_gdip_text(graphics, font_desc, "Khôi phục ký tự gốc khi gõ lặp dấu hoặc từ sai", left_text, 286, ARGB_TEXT_MUTED, false);
+    draw_gdip_text(graphics, font_bold, "Tự động khôi phục phím", left_text, 273, ARGB_TEXT_PRIMARY, false);
+    draw_gdip_text(graphics, font_desc, "Khôi phục ký tự gốc khi gõ lặp dấu hoặc từ sai", left_text, 298, ARGB_TEXT_MUTED, false);
 
     let restore_progress = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-    draw_animated_switch(graphics, right_ctrl - 48, 274, restore_progress);
+    draw_animated_switch(graphics, right_ctrl - 50, 283, restore_progress);
 
-    // 4. Card 3: Phím tắt chuyển đổi
-    gdiplus_draw_rounded_card(graphics, card_x, 334, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-    draw_gdip_text(graphics, font_bold, "Phím tắt chuyển đổi", left_text, 350, ARGB_TEXT_PRIMARY, false);
-    draw_gdip_text(graphics, font_desc, "Đổi nhanh giữa Tiếng Việt (V) và Anh (E)", left_text, 372, ARGB_TEXT_MUTED, false);
+    // 4. Card 3: Phím tắt chuyển đổi - chiều cao 82px
+    gdiplus_draw_rounded_card(graphics, card_x, 350, card_w, 82, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+    draw_gdip_text(graphics, font_bold, "Phím tắt chuyển đổi", left_text, 367, ARGB_TEXT_PRIMARY, false);
+    draw_gdip_text(graphics, font_desc, "Đổi nhanh giữa Tiếng Việt (V) và Anh (E)", left_text, 392, ARGB_TEXT_MUTED, false);
 
     let switch_progress = SWITCH_KEY_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
     draw_animated_tabs(
         graphics,
-        right_ctrl - 204,
-        350,
+        right_ctrl - 216,
+        369,
         &["Ctrl + Shift", "Alt + Z"],
-        98,
+        104,
+        38,
         switch_progress,
-        font_bold,
+        font_tab,
     );
 
-    // 5. Card 4: Trạng thái hệ thống
-    gdiplus_draw_rounded_card(graphics, card_x, 422, card_w, 72, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+    // 5. Card 4: Trạng thái hệ thống - chiều cao 76px
+    gdiplus_draw_rounded_card(graphics, card_x, 444, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
     let status_color = if config.enabled { ARGB_STATUS_GREEN } else { ARGB_STATUS_MUTED };
-    gdiplus_fill_ellipse(graphics, left_text as f32, 452.0, 10.0, 10.0, status_color);
+    gdiplus_fill_ellipse(graphics, left_text as f32, 475.0, 12.0, 12.0, status_color);
 
     let status_str = if config.enabled {
         "Trạng thái: Đang bật Tiếng Việt [V]"
     } else {
         "Trạng thái: Đang tắt Tiếng Việt [E]"
     };
-    draw_gdip_text(graphics, font_bold, status_str, left_text + 18, 436, ARGB_TEXT_PRIMARY, false);
-    draw_gdip_text(graphics, font_desc, "Nhấn phím tắt hoặc click khay hệ thống để đổi chế độ", left_text + 18, 458, ARGB_TEXT_MUTED, false);
+    draw_gdip_text(graphics, font_bold, status_str, left_text + 22, 459, ARGB_TEXT_PRIMARY, false);
+    draw_gdip_text(graphics, font_desc, "Nhấn phím tắt hoặc click khay hệ thống để đổi chế độ", left_text + 22, 483, ARGB_TEXT_MUTED, false);
 
     // 6. Footer Buttons: Căn thẳng hàng đối xứng tuyệt đối với hai cạnh Card
-    // Nút Thoát: mép trái card_x, rộng 140px
-    gdiplus_draw_rounded_card(graphics, card_x, 530, 140, 42, 8, ARGB_CARD_BG, ARGB_DANGER_BORDER, 1.0);
-    draw_gdip_text_centered(graphics, font_bold, "Thoát HoyuKey", card_x, 530, 140, 42, ARGB_DANGER_TEXT);
+    // Nút Thoát: mép trái card_x, rộng 140px, cao 44px
+    gdiplus_draw_rounded_card(graphics, card_x, 536, 140, 44, 8, ARGB_CARD_BG, ARGB_DANGER_BORDER, 1.0);
+    draw_gdip_text_centered(graphics, font_btn, "Thoát HoyuKey", card_x, 536, 140, 44, ARGB_DANGER_TEXT);
 
-    // Nút Đóng: mép phải card_right, rộng 160px
+    // Nút Đóng: mép phải card_right, rộng 160px, cao 44px
     let btn_close_x = card_right - 160;
-    gdiplus_draw_rounded_card(graphics, btn_close_x, 530, 160, 42, 8, ARGB_WHITE, ARGB_WHITE, 1.0);
-    draw_gdip_text_centered(graphics, font_bold, "Đóng (Ẩn về khay)", btn_close_x, 530, 160, 42, ARGB_TEXT_DARK);
+    gdiplus_draw_rounded_card(graphics, btn_close_x, 536, 160, 44, 8, ARGB_WHITE, ARGB_WHITE, 1.0);
+    draw_gdip_text_centered(graphics, font_btn, "Đóng (Ẩn về khay)", btn_close_x, 536, 160, 44, ARGB_TEXT_DARK);
 
     // Dọn dẹp tài nguyên GDI+
     GdipDeleteFont(font_title);
     GdipDeleteFont(font_bold);
-    GdipDeleteFont(font_body);
     GdipDeleteFont(font_desc);
-    GdipDeleteFont(font_badge);
+    GdipDeleteFont(font_tab);
+    GdipDeleteFont(font_btn);
     if !family.is_null() {
         GdipDeleteFontFamily(family);
     }
@@ -572,9 +601,9 @@ unsafe fn draw_animated_switch(
     y: i32,
     progress: f32,
 ) {
-    let w = 48;
-    let h = 26;
-    let radius = 13;
+    let w = 50;
+    let h = 28;
+    let radius = 14;
 
     // Rãnh: OFF là Đen Zinc #18181b, ON là Trắng tinh #ffffff
     let r_track = (24.0 + (255.0 - 24.0) * progress).round() as u32;
@@ -589,8 +618,8 @@ unsafe fn draw_animated_switch(
 
     gdiplus_draw_rounded_card(graphics, x, y, w, h, radius, color_track, color_border, 1.0);
 
-    // Núm gạt: OFF là Trắng #fafafa, ON là Đen #09090b
-    let knob_diameter = 20.0;
+    // Núm gạt: to 22px
+    let knob_diameter = 22.0;
     let knob_min_x = x as f32 + 3.0;
     let knob_max_x = (x + w) as f32 - knob_diameter - 3.0;
     let knob_curr_x = knob_min_x + (knob_max_x - knob_min_x) * progress;
@@ -610,10 +639,10 @@ unsafe fn draw_animated_tabs(
     y: i32,
     tabs: &[&str; 2],
     tab_w: i32,
+    tab_h: i32,
     progress: f32,
     font: *mut GpFont,
 ) {
-    let tab_h = 36;
     let total_w = tab_w * 2 + 8;
     let total_h = tab_h + 8;
 
@@ -776,8 +805,8 @@ unsafe fn draw_gdip_text(
     let rect = RectF {
         X: x as f32,
         Y: y as f32,
-        Width: 400.0,
-        Height: 30.0,
+        Width: 420.0,
+        Height: 36.0,
     };
 
     let mut brush: *mut GpSolidFill = null_mut();
