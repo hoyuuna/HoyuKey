@@ -579,9 +579,9 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
 
     let (card_x, card_w, card_right, right_ctrl, _, _) = get_layout_metrics(client_w);
 
-    // 1. Fixed Bottom Dock (y >= 566): 2 nút Thoát & Đóng độc lập với cuộn trang
+    // 1. Fixed Bottom Dock (y >= 584): 2 nút Thoát & Đóng vừa vặn, không thừa cằm
     let btn_w = (card_w - 12) / 2;
-    if y >= 578 && y <= 634 {
+    if y >= 598 && y <= 646 {
         if x >= card_x && x <= card_x + btn_w {
             return 30; // Thoát HoyuKey
         }
@@ -590,7 +590,7 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             return 31; // Đóng
         }
     }
-    if y >= 566 {
+    if y >= 584 {
         return -1;
     }
 
@@ -740,9 +740,9 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
     let (card_x, card_w, card_right, right_ctrl, _, _) = get_layout_metrics(client_w);
     let page = CURRENT_PAGE.load(Ordering::SeqCst);
 
-    // 1. Nút Thoát và Đóng (Fixed Bottom Dock ở mọi trang độc lập với cuộn)
+    // 1. Nút Thoát và Đóng (Fixed Bottom Dock ở mọi trang, vừa vặn không thừa cằm)
     let btn_w = (card_w - 12) / 2;
-    if y >= 578 && y <= 634 {
+    if y >= 598 && y <= 646 {
         if x >= card_x && x <= card_x + btn_w {
             unsafe {
                 PostQuitMessage(0);
@@ -757,7 +757,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             return;
         }
     }
-    if y >= 566 {
+    if y >= 584 {
         return;
     }
 
@@ -1049,8 +1049,8 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     let ease = 1.0 - (1.0 - progress).powi(3);
     let slide_distance = (card_w + 48) as f32;
 
-    // Đặt vùng Clip cho nội dung cuộn (0..566), giữ dock đáy cố định hoàn toàn
-    GdipSetClipRectI(graphics, 0, 0, w, 566, CombineModeReplace);
+    // Đặt vùng Clip cho nội dung cuộn (0..584), giữ dock đáy cố định hoàn toàn
+    GdipSetClipRectI(graphics, 0, 0, w, 584, CombineModeReplace);
 
     let scroll_y = if current_page == 0 || target_page == 0 {
         SCROLL_Y.load(Ordering::SeqCst) as f32
@@ -1171,8 +1171,8 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     // Bỏ clip để vẽ Fixed Bottom Dock độc lập
     GdipResetClip(graphics);
 
-    // Fixed Bottom Dock 2 nút Thoát & Đóng (y = 566..h)
-    let dock_y = 566;
+    // Fixed Bottom Dock 2 nút Thoát & Đóng (y = 584..h) - Gọn gàng, vừa vặn cân đối
+    let dock_y = 584;
     let mut dock_brush: *mut GpSolidFill = null_mut();
     GdipCreateSolidFill(ARGB_BG, &mut dock_brush);
     GdipFillRectangleI(graphics, dock_brush as *mut GpBrush, 0, dock_y, w, h - dock_y);
@@ -1181,7 +1181,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     gdiplus_draw_line(graphics, 0, dock_y, w, dock_y, ARGB_DIVIDER, 1.0);
 
     let btn_w = (card_w - 12) / 2;
-    let btn_y = 582;
+    let btn_y = 600;
     let btn_h = 44;
 
     let exit_bg = if hover_id == 30 { ARGB_DANGER_HOVER } else { ARGB_CARD_BG };
