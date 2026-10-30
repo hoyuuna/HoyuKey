@@ -915,7 +915,7 @@ mod tests {
 
         // "chuối" (vần uôi)
         engine.reset();
-        for ch in "chuoos".chars() {
+        for ch in "chuoois".chars() {
             engine.process_char(ch, &config);
         }
         assert_eq!(engine.current_word, "chuối");
