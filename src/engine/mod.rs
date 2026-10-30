@@ -107,10 +107,11 @@ impl Engine {
             };
         }
 
-        // 2. Tự động tái cân bằng vị trí dấu thanh (Dynamic Tone Re-balancing):
-        // Nếu từ hiện tại đã có dấu thanh (ví dụ "khí" có dấu sắc), mà người dùng gõ thêm nguyên âm (như 'o', 'a'),
-        // hệ thống tự động gỡ dấu cũ và tái định vị dấu thanh đúng quy tắc ngữ âm ("khoái" thay vì "khoaí")!
-        if c.is_ascii_alphabetic() && (!config.smart_english || !telex::is_foreign_word(&self.current_word)) {
+        // 2. Tự động tái cân bằng vị trí dấu thanh khi sửa hoặc gõ thêm nguyên âm
+        if config.modify_tone_in_word
+            && c.is_ascii_alphabetic()
+            && (!config.smart_english || !telex::is_foreign_word(&self.current_word))
+        {
             let existing_tone = find_existing_tone(&self.current_word);
             if existing_tone != Tone::None {
                 // Tách dấu thanh cũ ra
@@ -424,5 +425,29 @@ mod tests {
             engine.process_char(ch, &config);
         }
         assert_eq!(engine.current_word, "fĩ");
+    }
+
+    #[test]
+    fn test_telex_toggle_modify_tone_in_word() {
+        let mut engine = Engine::new();
+        let config_default = Config::default();
+
+        // Mặc định bật: "khí" + "a" -> "khái"
+        for ch in "khis".chars() {
+            engine.process_char(ch, &config_default);
+        }
+        engine.process_char('a', &config_default);
+        assert_eq!(engine.current_word, "khái");
+
+        // Khi tắt: "khí" + "a" -> "khía" (không tái cân bằng dấu)
+        let mut engine_off = Engine::new();
+        let mut config_off = Config::default();
+        config_off.modify_tone_in_word = false;
+
+        for ch in "khis".chars() {
+            engine_off.process_char(ch, &config_off);
+        }
+        engine_off.process_char('a', &config_off);
+        assert_eq!(engine_off.current_word, "khía");
     }
 }

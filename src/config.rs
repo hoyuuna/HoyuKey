@@ -26,6 +26,8 @@ pub struct Config {
     pub free_marking: bool,
     /// Nhận diện từ tiếng Anh thông minh (không can thiệp khi gõ các từ như fix, file, wifi, animation)
     pub smart_english: bool,
+    /// Tự động điều chỉnh dấu thanh khi sửa nguyên âm trong từ (khí -> khái)
+    pub modify_tone_in_word: bool,
 }
 
 impl Default for Config {
@@ -38,6 +40,7 @@ impl Default for Config {
             auto_restore: true,
             free_marking: true,
             smart_english: true,
+            modify_tone_in_word: true,
         }
     }
 }
