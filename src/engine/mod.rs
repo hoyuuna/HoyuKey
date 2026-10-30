@@ -20,26 +20,41 @@ pub enum KeyAction {
     Backspace,
 }
 
+#[derive(Debug, Clone)]
+struct HistoryToken {
+    word: String,
+    _separator: Option<char>,
+}
+
 pub struct Engine {
     current_word: String,
+    history: Vec<HistoryToken>,
 }
 
 impl Engine {
     pub fn new() -> Self {
         Self {
             current_word: String::new(),
+            history: Vec::new(),
         }
     }
 
     pub fn reset(&mut self) {
         self.current_word.clear();
+        self.history.clear();
     }
 
     /// Xử lý phím Backspace thông minh:
-    /// Nếu từ hiện tại đang có dấu thanh (ví dụ "quảng"), Backspace sẽ gỡ bỏ dấu thanh trước (trở về "quang")
-    /// để người dùng có thể gõ ngay phím dấu khác (như 'x' thành "quãng") như trên bàn phím điện thoại!
+    /// 1. Nếu buffer từ hiện tại rỗng nhưng có từ vừa nhập trước đó (ví dụ gõ "dụ" rồi space, giờ lùi lại),
+    ///    khôi phục ngay từ trước đó để người dùng sửa dấu/ký tự liền mạch.
+    /// 2. Nếu từ hiện tại đang có dấu thanh (ví dụ "quảng" hoặc "dụ"), Backspace sẽ gỡ bỏ dấu thanh trước (trở về "quang", "du")
+    ///    để người dùng có thể gõ ngay phím dấu khác (như 'x' thành "quãng", "dũ") như trên bàn phím điện thoại!
     pub fn handle_backspace(&mut self) -> Option<KeyAction> {
+        // Nếu từ hiện tại rỗng, kiểm tra xem có từ trong lịch sử vừa phân cách bằng space không
         if self.current_word.is_empty() {
+            if let Some(token) = self.history.pop() {
+                self.current_word = token.word;
+            }
             return None;
         }
 
@@ -86,7 +101,16 @@ impl Engine {
 
         // Nếu là phím khoảng trắng, ngắt dòng hoặc ký tự phân cách từ
         if c.is_whitespace() || is_word_boundary(c) {
-            self.reset();
+            if !self.current_word.is_empty() {
+                self.history.push(HistoryToken {
+                    word: self.current_word.clone(),
+                    _separator: Some(c),
+                });
+                if self.history.len() > 30 {
+                    self.history.remove(0);
+                }
+                self.current_word.clear();
+            }
             return KeyAction::PassThrough;
         }
 
@@ -256,6 +280,54 @@ mod tests {
                 text: "ngoài".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_telex_double_w() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ 'w' lần 1 -> "ư"
+        let a1 = engine.process_char('w', &config);
+        assert_eq!(a1, KeyAction::Transform { backspaces: 1, text: "ư".to_string() });
+        assert_eq!(engine.current_word, "ư");
+
+        // Gõ 'w' lần 2 -> hoàn tác thành "w" (chứ không phải "uw")
+        let a2 = engine.process_char('w', &config);
+        assert_eq!(a2, KeyAction::Transform { backspaces: 1, text: "w".to_string() });
+        assert_eq!(engine.current_word, "w");
+    }
+
+    #[test]
+    fn test_telex_edit_previous_word_du_to_du() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "duj" -> "dụ"
+        for ch in "duj".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "dụ");
+
+        // Gõ dấu cách: "dụ " -> commit từ vào lịch sử
+        engine.process_char(' ', &config);
+        assert_eq!(engine.current_word, "");
+
+        // Người dùng ấn Backspace xóa dấu cách:
+        let bs1 = engine.handle_backspace();
+        assert_eq!(bs1, None); // Phím space trên màn hình được xóa bình thường
+        assert_eq!(engine.current_word, "dụ"); // Engine khôi phục ngay từ "dụ"!
+
+        // Người dùng gõ ngay phím 'x' để sửa thành "dũ":
+        let a = engine.process_char('x', &config);
+        assert_eq!(
+            a,
+            KeyAction::Transform {
+                backspaces: 2,
+                text: "dũ".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "dũ");
     }
 
     #[test]

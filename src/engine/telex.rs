@@ -115,6 +115,23 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool) -> Option<String
 
         if undo_match {
             let mut new_chars = chars.clone();
+
+            // Nếu người dùng gõ 'w' khi ký tự cuối là 'ư'/'Ư' mà trước đó không phải là nguyên âm:
+            // Hoàn tác thành ký tự 'w' độc lập (ví dụ gõ "w" -> "ư", gõ tiếp "w" -> "w", hoặc "kw" -> "kư" -> "kw")
+            if base == 'u' && vmod == VowelMod::Horn && key == 'w' {
+                let is_standalone_w = if chars.len() == 1 {
+                    true
+                } else {
+                    let prev_c = chars[chars.len() - 2];
+                    decompose_vietnamese_char(prev_c).is_none()
+                };
+
+                if is_standalone_w {
+                    new_chars[last_idx] = if is_upper || char_upper { 'W' } else { 'w' };
+                    return Some(new_chars.into_iter().collect());
+                }
+            }
+
             let restored = get_vietnamese_vowel(base, VowelMod::None, tone).unwrap_or(base);
             let restored = if char_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
             new_chars[last_idx] = restored;

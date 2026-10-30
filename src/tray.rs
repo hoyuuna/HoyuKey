@@ -4,10 +4,14 @@ use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
     NOTIFYICONDATAW,
 };
+use windows_sys::Win32::Graphics::Gdi::{
+    CreateBitmap, CreateDIBSection, DeleteObject, GetDC, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER,
+    BI_RGB, DIB_RGB_COLORS,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateIcon, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
-    PostMessageW, SetForegroundWindow, TrackPopupMenuEx, HICON, HMENU, MF_CHECKED, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
+    AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
+    PostMessageW, SetForegroundWindow, TrackPopupMenuEx, HICON, HMENU, ICONINFO, MF_CHECKED,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
 };
 
 use crate::config::{Config, InputMethod};
@@ -25,9 +29,9 @@ pub const IDM_AUTO_RESTORE: usize = 1005;
 pub const IDM_CONTROL_PANEL: usize = 1008;
 pub const IDM_EXIT: usize = 1009;
 
-// Nhúng trực tiếp 2 icon V và E do người dùng cung cấp
-const V_ICON_BYTES_16: &[u8] = include_bytes!("../icon/v_16.bin");
-const E_ICON_BYTES_16: &[u8] = include_bytes!("../icon/e_16.bin");
+// Nhúng trực tiếp 2 icon V và E 32x32 Premultiplied 32-bit ARGB do người dùng cung cấp
+const V_ICON_BYTES_32: &[u8] = include_bytes!("../icon/v_32.bin");
+const E_ICON_BYTES_32: &[u8] = include_bytes!("../icon/e_32.bin");
 
 pub struct TrayManager {
     hwnd: HWND,
@@ -182,18 +186,39 @@ fn to_wide_chars(s: &str) -> Vec<u16> {
 }
 
 fn load_tray_icon(is_v: bool) -> HICON {
-    let bytes = if is_v { V_ICON_BYTES_16 } else { E_ICON_BYTES_16 };
-    let and_mask = [0u8; 32]; // 16x16 / 8 = 32 bytes
+    let bytes = if is_v { V_ICON_BYTES_32 } else { E_ICON_BYTES_32 };
+    let size = 32;
 
     unsafe {
-        CreateIcon(
-            null_mut(),
-            16,
-            16,
-            1,
-            32,
-            and_mask.as_ptr(),
-            bytes.as_ptr(),
-        )
+        let hdc = GetDC(null_mut());
+        let mut bmi: BITMAPINFO = std::mem::zeroed();
+        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = size;
+        bmi.bmiHeader.biHeight = -size; // top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let hbm_color = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+        if !bits.is_null() {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), bits as *mut u8, bytes.len());
+        }
+
+        // Tạo 1-bit monochrome mask (tất cả 0 để cho phép 32-bit alpha hoạt động)
+        let hbm_mask = CreateBitmap(size, size, 1, 1, std::ptr::null());
+
+        let mut icon_info: ICONINFO = std::mem::zeroed();
+        icon_info.fIcon = 1; // true = ICON
+        icon_info.hbmColor = hbm_color;
+        icon_info.hbmMask = hbm_mask;
+
+        let hicon = CreateIconIndirect(&icon_info);
+
+        DeleteObject(hbm_color);
+        DeleteObject(hbm_mask);
+        ReleaseDC(null_mut(), hdc);
+
+        hicon
     }
 }

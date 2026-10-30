@@ -1,14 +1,13 @@
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicUsize, Ordering};
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    AlphaBlend, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection,
-    CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, Ellipse, EndPaint,
-    InvalidateRect, RoundRect, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
-    SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
-    DIB_RGB_COLORS, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, PS_SOLID,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, DeleteDC,
+    DeleteObject, DrawTextW, EndPaint, InvalidateRect, ScreenToClient, SelectObject, SetBkColor,
+    SetBkMode, SetTextColor, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT,
     SRCCOPY, TRANSPARENT,
 };
+use windows_sys::Win32::Graphics::GdiPlus::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos, GetSystemMetrics, KillTimer,
     LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW, SetCursor, SetForegroundWindow,
@@ -23,6 +22,7 @@ use crate::tray::WM_APP_UPDATE_TRAY;
 use crate::GLOBAL_STATE;
 
 pub static SETTINGS_HWND: AtomicIsize = AtomicIsize::new(0);
+static GDIP_TOKEN: AtomicUsize = AtomicUsize::new(0);
 
 // Timer ID cho animation 60 FPS
 const TIMER_ID_ANIM: usize = 1001;
@@ -33,19 +33,52 @@ static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
 
-// Nhúng logo 48x48 BGRA từ icon/logo.png
-const LOGO_BGRA_48: &[u8] = include_bytes!("../icon/logo_48.bin");
+// Nhúng logo 128x128 Premultiplied ARGB siêu sắc nét
+const LOGO_BGRA_128: &[u8] = include_bytes!("../icon/logo_128.bin");
 
-// Bảng màu Shadcn UI Dark Mode (Zinc Palette chuẩn, tương phản cao, dịu mắt)
-const COLOR_BG: u32 = 0x0C0909;             // #09090c
+// Bảng màu Shadcn UI Dark Mode (Zinc Palette chuẩn mực cao cấp)
 const COLOR_CARD_BG: u32 = 0x161313;        // #131316
-const COLOR_CARD_BORDER: u32 = 0x2A2424;    // #24242a viền tinh tế 1px
 const COLOR_TEXT_PRIMARY: u32 = 0xF8F6F6;   // #f6f6f8 (trắng sáng sắc nét)
-const COLOR_TEXT_MUTED: u32 = 0x9D9494;     // #94949d (xám zinc chuẩn)
-const COLOR_STATUS_GREEN: u32 = 0x5EC522;   // #22c55e
-const COLOR_BTN_DANGER: u32 = 0x5555F4;     // #f45555
+const COLOR_TEXT_MUTED: u32 = 0x9D9494;     // #94949d (xám zinc)
+
+// Màu sắc ARGB cho GDI+ Anti-Aliasing
+const ARGB_BG: u32 = 0xFF09090C;
+const ARGB_CARD_BG: u32 = 0xFF131316;
+const ARGB_CARD_BORDER: u32 = 0xFF24242A;
+const ARGB_DIVIDER: u32 = 0xFF1E1E23;
+const ARGB_STATUS_GREEN: u32 = 0xFF22C55E;
+const ARGB_STATUS_MUTED: u32 = 0xFF71717A;
+const ARGB_PILL_TRACK: u32 = 0xFF18181B;
+const ARGB_WHITE: u32 = 0xFFFAFAFA;
+const ARGB_BTN_DANGER_BORDER: u32 = 0xFF352020;
+
+pub fn init_ui_subsystems() {
+    unsafe {
+        let mut token: usize = 0;
+        let input = GdiplusStartupInput {
+            GdiplusVersion: 1,
+            DebugEventCallback: 0,
+            SuppressBackgroundThread: 0,
+            SuppressExternalCodecs: 0,
+        };
+        if GdiplusStartup(&mut token, &input, null_mut()) == 0 {
+            GDIP_TOKEN.store(token, Ordering::SeqCst);
+        }
+    }
+}
+
+pub fn shutdown_ui_subsystems() {
+    let token = GDIP_TOKEN.swap(0, Ordering::SeqCst);
+    if token != 0 {
+        unsafe {
+            GdiplusShutdown(token);
+        }
+    }
+}
 
 pub fn create_settings_window(hinstance: HMODULE) -> HWND {
+    init_ui_subsystems();
+
     let class_name = to_wide("HoyuKey_ShadcnSettingsClass");
     let window_title = to_wide("HoyuKey - Bảng điều khiển");
 
@@ -104,8 +137,8 @@ pub fn show_settings_window() {
         drop(state);
 
         unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
             ShowWindow(hwnd, SW_SHOW);
+            ShowWindow(hwnd, SW_RESTORE);
             SetForegroundWindow(hwnd);
             InvalidateRect(hwnd, null_mut(), 0);
         }
@@ -119,43 +152,6 @@ unsafe extern "system" fn settings_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        WM_ERASEBKGND => 1,
-        WM_TIMER => {
-            if wparam == TIMER_ID_ANIM {
-                let state = GLOBAL_STATE.lock().unwrap();
-                let target_tone = if state.config.modern_tone { 1000.0 } else { 0.0 };
-                let target_restore = if state.config.auto_restore { 1000.0 } else { 0.0 };
-                let target_method = if state.config.input_method == InputMethod::Vni { 1000.0 } else { 0.0 };
-                let target_switch = if state.config.switch_key == SwitchKey::AltZ { 1000.0 } else { 0.0 };
-                drop(state);
-
-                let curr_tone = MODERN_TONE_PROGRESS.load(Ordering::SeqCst) as f32;
-                let curr_restore = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst) as f32;
-                let curr_method = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst) as f32;
-                let curr_switch = SWITCH_KEY_PROGRESS.load(Ordering::SeqCst) as f32;
-
-                let next_tone = step_anim(curr_tone, target_tone);
-                let next_restore = step_anim(curr_restore, target_restore);
-                let next_method = step_anim(curr_method, target_method);
-                let next_switch = step_anim(curr_switch, target_switch);
-
-                MODERN_TONE_PROGRESS.store(next_tone.round() as u32, Ordering::SeqCst);
-                AUTO_RESTORE_PROGRESS.store(next_restore.round() as u32, Ordering::SeqCst);
-                INPUT_METHOD_PROGRESS.store(next_method.round() as u32, Ordering::SeqCst);
-                SWITCH_KEY_PROGRESS.store(next_switch.round() as u32, Ordering::SeqCst);
-
-                InvalidateRect(hwnd, null_mut(), 0);
-
-                if next_tone == target_tone
-                    && next_restore == target_restore
-                    && next_method == target_method
-                    && next_switch == target_switch
-                {
-                    KillTimer(hwnd, TIMER_ID_ANIM);
-                }
-            }
-            0
-        }
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
@@ -166,8 +162,8 @@ unsafe extern "system" fn settings_wnd_proc(
             let h = rect.bottom - rect.top;
 
             let mem_dc = CreateCompatibleDC(hdc);
-            let mem_bm = CreateCompatibleBitmap(hdc, w, h);
-            let old_bm = SelectObject(mem_dc, mem_bm);
+            let mem_bitmap = CreateCompatibleBitmap(hdc, w, h);
+            let old_bm = SelectObject(mem_dc, mem_bitmap);
 
             let config = {
                 let state = GLOBAL_STATE.lock().unwrap();
@@ -179,9 +175,72 @@ unsafe extern "system" fn settings_wnd_proc(
             BitBlt(hdc, 0, 0, w, h, mem_dc, 0, 0, SRCCOPY);
 
             SelectObject(mem_dc, old_bm);
-            DeleteObject(mem_bm);
+            DeleteObject(mem_bitmap);
             DeleteDC(mem_dc);
+
             EndPaint(hwnd, &ps);
+            0
+        }
+        WM_ERASEBKGND => 1,
+        WM_TIMER => {
+            if wparam as usize == TIMER_ID_ANIM {
+                let config = {
+                    let state = GLOBAL_STATE.lock().unwrap();
+                    state.config.clone()
+                };
+
+                let mut still_animating = false;
+
+                // 1. Modern Tone Switch animation
+                let target_tone = if config.modern_tone { 1000 } else { 0 };
+                let curr_tone = MODERN_TONE_PROGRESS.load(Ordering::SeqCst);
+                if curr_tone != target_tone {
+                    still_animating = true;
+                    let diff = (target_tone as i32 - curr_tone as i32) / 3;
+                    let step = if diff == 0 { if target_tone > curr_tone { 1 } else { -1 } } else { diff };
+                    let next = (curr_tone as i32 + step).clamp(0, 1000) as u32;
+                    MODERN_TONE_PROGRESS.store(next, Ordering::SeqCst);
+                }
+
+                // 2. Auto Restore Switch animation
+                let target_restore = if config.auto_restore { 1000 } else { 0 };
+                let curr_restore = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst);
+                if curr_restore != target_restore {
+                    still_animating = true;
+                    let diff = (target_restore as i32 - curr_restore as i32) / 3;
+                    let step = if diff == 0 { if target_restore > curr_restore { 1 } else { -1 } } else { diff };
+                    let next = (curr_restore as i32 + step).clamp(0, 1000) as u32;
+                    AUTO_RESTORE_PROGRESS.store(next, Ordering::SeqCst);
+                }
+
+                // 3. Input Method Tab animation (Telex / VNI)
+                let target_method = if config.input_method == InputMethod::Vni { 1000 } else { 0 };
+                let curr_method = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst);
+                if curr_method != target_method {
+                    still_animating = true;
+                    let diff = (target_method as i32 - curr_method as i32) / 3;
+                    let step = if diff == 0 { if target_method > curr_method { 1 } else { -1 } } else { diff };
+                    let next = (curr_method as i32 + step).clamp(0, 1000) as u32;
+                    INPUT_METHOD_PROGRESS.store(next, Ordering::SeqCst);
+                }
+
+                // 4. Switch Key Tab animation (Ctrl+Shift / Alt+Z)
+                let target_switch = if config.switch_key == SwitchKey::AltZ { 1000 } else { 0 };
+                let curr_switch = SWITCH_KEY_PROGRESS.load(Ordering::SeqCst);
+                if curr_switch != target_switch {
+                    still_animating = true;
+                    let diff = (target_switch as i32 - curr_switch as i32) / 3;
+                    let step = if diff == 0 { if target_switch > curr_switch { 1 } else { -1 } } else { diff };
+                    let next = (curr_switch as i32 + step).clamp(0, 1000) as u32;
+                    SWITCH_KEY_PROGRESS.store(next, Ordering::SeqCst);
+                }
+
+                InvalidateRect(hwnd, null_mut(), 0);
+
+                if !still_animating {
+                    KillTimer(hwnd, TIMER_ID_ANIM);
+                }
+            }
             0
         }
         WM_LBUTTONDOWN => {
@@ -207,36 +266,40 @@ unsafe extern "system" fn settings_wnd_proc(
             0
         }
         WM_DESTROY => {
-            KillTimer(hwnd, TIMER_ID_ANIM);
-            SETTINGS_HWND.store(0, Ordering::SeqCst);
+            shutdown_ui_subsystems();
+            PostQuitMessage(0);
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
-fn step_anim(current: f32, target: f32) -> f32 {
-    let diff = target - current;
-    if diff.abs() > 5.0 {
-        current + diff * 0.35
-    } else {
-        target
-    }
-}
-
 fn is_clickable_area(x: i32, y: i32) -> bool {
-    // Kiểu gõ Telex / VNI (căn chuẩn mép phải 492)
-    (x >= 296 && x <= 492 && y >= 100 && y <= 146)
-    // Switch Bỏ dấu kiểu mới
-    || (x >= 440 && x <= 494 && y >= 198 && y <= 234)
-    // Switch Tự động khôi phục phím
-    || (x >= 440 && x <= 494 && y >= 270 && y <= 306)
-    // Phím tắt Ctrl+Shift / Alt+Z (căn chuẩn mép phải 492)
-    || (x >= 280 && x <= 492 && y >= 348 && y <= 394)
-    // Nút Thoát
-    || (x >= 28 && x <= 168 && y >= 530 && y <= 572)
-    // Nút Đóng
-    || (x >= 352 && x <= 512 && y >= 530 && y <= 572)
+    // 1. Tab Kiểu gõ (Telex / VNI)
+    if x >= 296 && x <= 492 && y >= 100 && y <= 146 {
+        return true;
+    }
+    // 2. Switch Bỏ dấu kiểu mới
+    if x >= 440 && x <= 494 && y >= 198 && y <= 234 {
+        return true;
+    }
+    // 3. Switch Tự động khôi phục phím
+    if x >= 440 && x <= 494 && y >= 270 && y <= 306 {
+        return true;
+    }
+    // 4. Tab Phím tắt (Ctrl+Shift / Alt+Z)
+    if x >= 280 && x <= 492 && y >= 348 && y <= 394 {
+        return true;
+    }
+    // 5. Nút Thoát HoyuKey
+    if x >= 28 && x <= 168 && y >= 530 && y <= 572 {
+        return true;
+    }
+    // 6. Nút Đóng (Ẩn về khay)
+    if x >= 352 && x <= 512 && y >= 530 && y <= 572 {
+        return true;
+    }
+    false
 }
 
 fn handle_mouse_click(hwnd: HWND, x: i32, y: i32) {
@@ -317,30 +380,49 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32) {
 }
 
 unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h: i32, config: &Config) {
-    // 1. Nền tổng thể #09090c
-    let bg_brush = CreateSolidBrush(COLOR_BG);
-    let bg_rect = RECT { left: 0, top: 0, right: w, bottom: h };
-    windows_sys::Win32::Graphics::Gdi::FillRect(dc, &bg_rect, bg_brush);
-    DeleteObject(bg_brush);
+    // 1. Khởi tạo GDI+ Graphics từ DC bộ nhớ
+    let mut graphics: *mut GpGraphics = null_mut();
+    GdipCreateFromHDC(dc, &mut graphics);
+    if graphics.is_null() {
+        return;
+    }
 
+    // Thiết lập chất lượng kết xuất siêu mượt: Anti-Aliasing, Bicubic Interpolation
+    GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
+    GdipSetInterpolationMode(graphics, InterpolationModeHighQualityBicubic);
+    GdipSetPixelOffsetMode(graphics, PixelOffsetModeHighQuality);
+
+    // Xóa nền đen Zinc #09090c
+    let mut bg_brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(ARGB_BG, &mut bg_brush);
+    let mut bg_path: *mut GpPath = null_mut();
+    GdipCreatePath(FillModeAlternate, &mut bg_path);
+    GdipAddPathLine(bg_path, 0.0, 0.0, w as f32, 0.0);
+    GdipAddPathLine(bg_path, w as f32, 0.0, w as f32, h as f32);
+    GdipAddPathLine(bg_path, w as f32, h as f32, 0.0, h as f32);
+    GdipClosePathFigure(bg_path);
+    GdipFillPath(graphics, bg_brush as *mut GpBrush, bg_path);
+    GdipDeletePath(bg_path);
+    GdipDeleteBrush(bg_brush as *mut GpBrush);
+
+    // Chuẩn bị font Segoe UI chất lượng cao
     SetBkMode(dc, TRANSPARENT as _);
     SetBkColor(dc, COLOR_CARD_BG);
 
-    // Typography chất lượng cao: Segoe UI với CLEARTYPE_NATURAL_QUALITY
     let font_title = create_font(22, 700);
     let font_bold = create_font(14, 600);
     let font_body = create_font(13, 400);
     let font_small = create_font(12, 400);
     let font_badge = create_font(11, 600);
 
-    // 2. Header
-    draw_bgra_image(dc, 28, 22, 48, 48, LOGO_BGRA_48);
+    // 2. Header: Logo sắc nét 128x128 render Bicubic vào 48x48
+    gdiplus_draw_image(graphics, 28, 22, 48, 48, LOGO_BGRA_128, 128, 128);
 
     SelectObject(dc, font_title);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
     draw_text(dc, "HoyuKey", 88, 22);
 
-    draw_rounded_card(dc, 192, 27, 88, 20, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    gdiplus_draw_rounded_card(graphics, 192, 27, 88, 20, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
     SelectObject(dc, font_badge);
     SetTextColor(dc, COLOR_TEXT_MUTED);
     draw_centered_text(dc, "Pre-release", 192, 27, 88, 20);
@@ -350,10 +432,10 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     draw_text(dc, "Bộ gõ Tiếng Việt thế hệ mới cho PC", 88, 49);
 
     let card_x = 28;
-    let card_w = 484; // Căn thẳng hàng hoàn hảo mép trái 28, mép phải 512
+    let card_w = 484; // Căn thẳng hàng tuyệt đối mép trái 28, mép phải 512
 
     // 3. Card 1: Kiểu gõ chính (Telex / VNI)
-    draw_rounded_card(dc, card_x, 86, card_w, 76, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
     SelectObject(dc, font_bold);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
     draw_text(dc, "Kiểu gõ chính", 48, 104);
@@ -363,6 +445,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
 
     let method_progress = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
     draw_animated_tabs(
+        graphics,
         dc,
         296, // Căn chuẩn mép phải = 296 + 196 = 492
         102,
@@ -373,7 +456,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     );
 
     // 4. Card 2: Tùy chọn gõ dấu
-    draw_rounded_card(dc, card_x, 174, card_w, 148, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    gdiplus_draw_rounded_card(graphics, card_x, 174, card_w, 148, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
     // Row 1: Bỏ dấu kiểu mới
     SelectObject(dc, font_bold);
@@ -384,10 +467,10 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     draw_text(dc, "Đặt dấu ở âm thứ hai: hóa, hòa thay vì hoá, hoà", 48, 216);
 
     let tone_progress = MODERN_TONE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-    draw_animated_switch(dc, 444, 202, tone_progress); // Căn chuẩn mép phải 444 + 48 = 492
+    draw_animated_switch(graphics, 444, 202, tone_progress); // Căn chuẩn mép phải 444 + 48 = 492
 
     // Đường ngăn cách căn chuẩn mép trái 48, mép phải 492
-    draw_divider(dc, 48, 248, 444);
+    gdiplus_draw_line(graphics, 48, 248, 492, 248, ARGB_DIVIDER, 1.0);
 
     // Row 2: Tự động khôi phục phím
     SelectObject(dc, font_bold);
@@ -398,10 +481,10 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     draw_text(dc, "Khôi phục ký tự gốc khi gõ lặp dấu hoặc từ sai", 48, 288);
 
     let restore_progress = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-    draw_animated_switch(dc, 444, 274, restore_progress); // Căn chuẩn mép phải 444 + 48 = 492
+    draw_animated_switch(graphics, 444, 274, restore_progress); // Căn chuẩn mép phải 444 + 48 = 492
 
     // 5. Card 3: Phím tắt chuyển đổi
-    draw_rounded_card(dc, card_x, 334, card_w, 76, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    gdiplus_draw_rounded_card(graphics, card_x, 334, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
     SelectObject(dc, font_bold);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
     draw_text(dc, "Phím tắt chuyển đổi", 48, 352);
@@ -411,6 +494,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
 
     let switch_progress = SWITCH_KEY_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
     draw_animated_tabs(
+        graphics,
         dc,
         280, // Căn chuẩn mép phải = 280 + 212 = 492
         350,
@@ -421,16 +505,9 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     );
 
     // 6. Card 4: Trạng thái hệ thống
-    draw_rounded_card(dc, card_x, 422, card_w, 72, 10, COLOR_CARD_BG, COLOR_CARD_BORDER);
-    let dot_brush = CreateSolidBrush(if config.enabled { COLOR_STATUS_GREEN } else { COLOR_TEXT_MUTED });
-    let dot_pen = CreatePen(PS_SOLID as _, 1, if config.enabled { COLOR_STATUS_GREEN } else { COLOR_TEXT_MUTED });
-    let old_brush = SelectObject(dc, dot_brush);
-    let old_pen = SelectObject(dc, dot_pen);
-    Ellipse(dc, 48, 453, 58, 463);
-    SelectObject(dc, old_brush);
-    SelectObject(dc, old_pen);
-    DeleteObject(dot_brush);
-    DeleteObject(dot_pen);
+    gdiplus_draw_rounded_card(graphics, card_x, 422, card_w, 72, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+    let status_color = if config.enabled { ARGB_STATUS_GREEN } else { ARGB_STATUS_MUTED };
+    gdiplus_fill_ellipse(graphics, 48.0, 453.0, 10.0, 10.0, status_color);
 
     SelectObject(dc, font_bold);
     SetTextColor(dc, COLOR_TEXT_PRIMARY);
@@ -446,13 +523,14 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     draw_text(dc, "Nhấn phím tắt hoặc click khay hệ thống để đổi chế độ", 68, 462);
 
     // 7. Footer Buttons: Căn thẳng hàng tuyệt đối với hai cạnh của Cards
-    // Cạnh trái: 28, Cạnh phải: 512
-    draw_rounded_card(dc, 28, 530, 140, 42, 8, COLOR_CARD_BG, COLOR_CARD_BORDER);
+    // Nút Thoát: mép trái 28
+    gdiplus_draw_rounded_card(graphics, 28, 530, 140, 42, 8, ARGB_CARD_BG, ARGB_BTN_DANGER_BORDER, 1.0);
     SelectObject(dc, font_bold);
-    SetTextColor(dc, COLOR_BTN_DANGER);
+    SetTextColor(dc, 0x4444F8); // Đỏ cá tính
     draw_centered_text(dc, "Thoát HoyuKey", 28, 530, 140, 42);
 
-    draw_rounded_card(dc, 352, 530, 160, 42, 8, 0xFAFAFA, 0xFAFAFA);
+    // Nút Đóng: mép phải 512 (352 + 160 = 512)
+    gdiplus_draw_rounded_card(graphics, 352, 530, 160, 42, 8, ARGB_WHITE, ARGB_WHITE, 1.0);
     SelectObject(dc, font_bold);
     SetTextColor(dc, 0x0C0909);
     draw_centered_text(dc, "Đóng (Ẩn về khay)", 352, 530, 160, 42);
@@ -462,10 +540,12 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     DeleteObject(font_body);
     DeleteObject(font_small);
     DeleteObject(font_badge);
+
+    GdipDeleteGraphics(graphics);
 }
 
 unsafe fn draw_animated_switch(
-    dc: windows_sys::Win32::Graphics::Gdi::HDC,
+    graphics: *mut GpGraphics,
     x: i32,
     y: i32,
     progress: f32,
@@ -475,44 +555,35 @@ unsafe fn draw_animated_switch(
     let radius = 13;
 
     // Rãnh: OFF là Đen #18181b, ON là Trắng tinh #ffffff
-    let r_track = (24.0 + (255.0 - 24.0) * progress).round() as u8;
-    let g_track = (24.0 + (255.0 - 24.0) * progress).round() as u8;
-    let b_track = (27.0 + (255.0 - 27.0) * progress).round() as u8;
-    let color_track = (b_track as u32) << 16 | (g_track as u32) << 8 | (r_track as u32);
+    let r_track = (24.0 + (255.0 - 24.0) * progress).round() as u32;
+    let g_track = (24.0 + (255.0 - 24.0) * progress).round() as u32;
+    let b_track = (27.0 + (255.0 - 27.0) * progress).round() as u32;
+    let color_track = 0xFF000000 | (r_track << 16) | (g_track << 8) | b_track;
 
-    let r_border = (63.0 + (255.0 - 63.0) * progress).round() as u8;
-    let g_border = (63.0 + (255.0 - 63.0) * progress).round() as u8;
-    let b_border = (70.0 + (255.0 - 70.0) * progress).round() as u8;
-    let color_border = (b_border as u32) << 16 | (g_border as u32) << 8 | (r_border as u32);
+    let r_border = (63.0 + (255.0 - 63.0) * progress).round() as u32;
+    let g_border = (63.0 + (255.0 - 63.0) * progress).round() as u32;
+    let b_border = (70.0 + (255.0 - 70.0) * progress).round() as u32;
+    let color_border = 0xFF000000 | (r_border << 16) | (g_border << 8) | b_border;
 
-    draw_rounded_card(dc, x, y, w, h, radius, color_track, color_border);
+    gdiplus_draw_rounded_card(graphics, x, y, w, h, radius, color_track, color_border, 1.0);
 
     // Chấm tròn: OFF là Trắng #fafafa, ON là Đen #09090b
-    let knob_diameter = 20;
-    let knob_min_x = x + 3;
-    let knob_max_x = x + w - knob_diameter - 3;
-    let knob_curr_x = (knob_min_x as f32 + (knob_max_x - knob_min_x) as f32 * progress).round() as i32;
-    let knob_y = y + 3;
+    let knob_diameter = 20.0;
+    let knob_min_x = x as f32 + 3.0;
+    let knob_max_x = (x + w) as f32 - knob_diameter - 3.0;
+    let knob_curr_x = knob_min_x + (knob_max_x - knob_min_x) * progress;
+    let knob_y = y as f32 + 3.0;
 
-    let r_knob = (250.0 + (9.0 - 250.0) * progress).round() as u8;
-    let g_knob = (250.0 + (9.0 - 250.0) * progress).round() as u8;
-    let b_knob = (250.0 + (12.0 - 250.0) * progress).round() as u8;
-    let color_knob = (b_knob as u32) << 16 | (g_knob as u32) << 8 | (r_knob as u32);
+    let r_knob = (250.0 + (9.0 - 250.0) * progress).round() as u32;
+    let g_knob = (250.0 + (9.0 - 250.0) * progress).round() as u32;
+    let b_knob = (250.0 + (12.0 - 250.0) * progress).round() as u32;
+    let color_knob = 0xFF000000 | (r_knob << 16) | (g_knob << 8) | b_knob;
 
-    let knob_brush = CreateSolidBrush(color_knob);
-    let knob_pen = CreatePen(PS_SOLID as _, 1, color_knob);
-    let old_brush = SelectObject(dc, knob_brush);
-    let old_pen = SelectObject(dc, knob_pen);
-
-    Ellipse(dc, knob_curr_x, knob_y, knob_curr_x + knob_diameter, knob_y + knob_diameter);
-
-    SelectObject(dc, old_brush);
-    SelectObject(dc, old_pen);
-    DeleteObject(knob_brush);
-    DeleteObject(knob_pen);
+    gdiplus_fill_ellipse(graphics, knob_curr_x, knob_y, knob_diameter, knob_diameter, color_knob);
 }
 
 unsafe fn draw_animated_tabs(
+    graphics: *mut GpGraphics,
     dc: windows_sys::Win32::Graphics::Gdi::HDC,
     x: i32,
     y: i32,
@@ -525,14 +596,14 @@ unsafe fn draw_animated_tabs(
     let total_w = tab_w * 2 + 8;
     let total_h = tab_h + 8;
 
-    draw_rounded_card(dc, x, y, total_w, total_h, 8, 0x1B1818, COLOR_CARD_BORDER);
+    gdiplus_draw_rounded_card(graphics, x, y, total_w, total_h, 8, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
 
-    let pill_min_x = x + 4;
-    let pill_max_x = x + 4 + tab_w;
-    let pill_curr_x = (pill_min_x as f32 + (pill_max_x - pill_min_x) as f32 * progress).round() as i32;
+    let pill_min_x = (x + 4) as f32;
+    let pill_max_x = (x + 4 + tab_w) as f32;
+    let pill_curr_x = pill_min_x + (pill_max_x - pill_min_x) * progress;
     let pill_y = y + 4;
 
-    draw_rounded_card(dc, pill_curr_x, pill_y, tab_w, tab_h, 6, 0xFAFAFA, 0xFAFAFA);
+    gdiplus_draw_rounded_card(graphics, pill_curr_x.round() as i32, pill_y, tab_w, tab_h, 6, ARGB_WHITE, ARGB_WHITE, 1.0);
 
     SelectObject(dc, font);
 
@@ -545,41 +616,128 @@ unsafe fn draw_animated_tabs(
     draw_centered_text(dc, tabs[1], x + 4 + tab_w, y + 4, tab_w, tab_h);
 }
 
-unsafe fn draw_rounded_card(
-    dc: windows_sys::Win32::Graphics::Gdi::HDC,
+unsafe fn create_rounded_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> *mut GpPath {
+    let mut path: *mut GpPath = null_mut();
+    GdipCreatePath(FillModeAlternate, &mut path);
+    let d = r * 2.0;
+
+    // Top-left arc
+    GdipAddPathArc(path, x, y, d, d, 180.0, 90.0);
+    // Top line
+    GdipAddPathLine(path, x + r, y, x + w - r, y);
+    // Top-right arc
+    GdipAddPathArc(path, x + w - d, y, d, d, 270.0, 90.0);
+    // Right line
+    GdipAddPathLine(path, x + w, y + r, x + w, y + h - r);
+    // Bottom-right arc
+    GdipAddPathArc(path, x + w - d, y + h - d, d, d, 0.0, 90.0);
+    // Bottom line
+    GdipAddPathLine(path, x + w - r, y + h, x + r, y + h);
+    // Bottom-left arc
+    GdipAddPathArc(path, x, y + h - d, d, d, 90.0, 90.0);
+    // Left line
+    GdipAddPathLine(path, x, y + h - r, x, y + r);
+
+    GdipClosePathFigure(path);
+    path
+}
+
+unsafe fn gdiplus_draw_rounded_card(
+    graphics: *mut GpGraphics,
     x: i32,
     y: i32,
     w: i32,
     h: i32,
     radius: i32,
-    bg_color: u32,
-    border_color: u32,
+    bg_argb: u32,
+    border_argb: u32,
+    border_width: f32,
 ) {
-    let brush = CreateSolidBrush(bg_color);
-    let pen = CreatePen(PS_SOLID as _, 1, border_color);
-    let old_brush = SelectObject(dc, brush);
-    let old_pen = SelectObject(dc, pen);
+    let path = create_rounded_path(x as f32, y as f32, w as f32, h as f32, radius as f32);
 
-    RoundRect(dc, x, y, x + w, y + h, radius * 2, radius * 2);
+    let mut brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(bg_argb, &mut brush);
+    GdipFillPath(graphics, brush as *mut GpBrush, path);
+    GdipDeleteBrush(brush as *mut GpBrush);
 
-    SelectObject(dc, old_brush);
-    SelectObject(dc, old_pen);
-    DeleteObject(brush);
-    DeleteObject(pen);
+    if border_width > 0.0 {
+        let mut pen: *mut GpPen = null_mut();
+        GdipCreatePen1(border_argb, border_width, UnitPixel, &mut pen);
+        GdipDrawPath(graphics, pen, path);
+        GdipDeletePen(pen);
+    }
+
+    GdipDeletePath(path);
 }
 
-unsafe fn draw_divider(
-    dc: windows_sys::Win32::Graphics::Gdi::HDC,
-    x1: i32,
-    y: i32,
-    w: i32,
+unsafe fn gdiplus_fill_ellipse(
+    graphics: *mut GpGraphics,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    bg_argb: u32,
 ) {
-    let pen = CreatePen(PS_SOLID as _, 1, COLOR_CARD_BORDER);
-    let old_pen = SelectObject(dc, pen);
-    windows_sys::Win32::Graphics::Gdi::MoveToEx(dc, x1, y, null_mut());
-    windows_sys::Win32::Graphics::Gdi::LineTo(dc, x1 + w, y);
-    SelectObject(dc, old_pen);
-    DeleteObject(pen);
+    let mut brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(bg_argb, &mut brush);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, x, y, w, h);
+    GdipDeleteBrush(brush as *mut GpBrush);
+}
+
+unsafe fn gdiplus_draw_line(
+    graphics: *mut GpGraphics,
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+    color_argb: u32,
+    width: f32,
+) {
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, width, UnitPixel, &mut pen);
+    GdipDrawLineI(graphics, pen, x1, y1, x2, y2);
+    GdipDeletePen(pen);
+}
+
+unsafe fn gdiplus_draw_image(
+    graphics: *mut GpGraphics,
+    dest_x: i32,
+    dest_y: i32,
+    dest_w: i32,
+    dest_h: i32,
+    bytes: &[u8],
+    src_w: i32,
+    src_h: i32,
+) {
+    const PIXEL_FORMAT_32BPP_PARGB: i32 = 0x000E200B;
+    let mut bitmap: *mut GpBitmap = null_mut();
+    GdipCreateBitmapFromScan0(
+        src_w,
+        src_h,
+        src_w * 4,
+        PIXEL_FORMAT_32BPP_PARGB,
+        bytes.as_ptr() as _,
+        &mut bitmap,
+    );
+    if !bitmap.is_null() {
+        GdipDrawImageRectRectI(
+            graphics,
+            bitmap as *mut GpImage,
+            dest_x,
+            dest_y,
+            dest_w,
+            dest_h,
+            0,
+            0,
+            src_w,
+            src_h,
+            UnitPixel,
+            null_mut(),
+            0,
+            null_mut(),
+        );
+        GdipDisposeImage(bitmap as *mut GpImage);
+    }
 }
 
 unsafe fn draw_text(
@@ -626,56 +784,6 @@ unsafe fn draw_centered_text(
         &mut rect,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE,
     );
-}
-
-unsafe fn draw_bgra_image(
-    hdc_dest: windows_sys::Win32::Graphics::Gdi::HDC,
-    dest_x: i32,
-    dest_y: i32,
-    w: i32,
-    h: i32,
-    bgra_bytes: &[u8],
-) {
-    let mut bmi: BITMAPINFO = std::mem::zeroed();
-    bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-    bmi.bmiHeader.biWidth = w;
-    bmi.bmiHeader.biHeight = -h;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-    let mem_dc = CreateCompatibleDC(hdc_dest);
-    let hbitmap = CreateDIBSection(
-        hdc_dest,
-        &bmi,
-        DIB_RGB_COLORS,
-        &mut bits,
-        std::ptr::null_mut(),
-        0,
-    );
-
-    if hbitmap != std::ptr::null_mut() && !bits.is_null() {
-        std::ptr::copy_nonoverlapping(bgra_bytes.as_ptr(), bits as *mut u8, bgra_bytes.len());
-        let old_bm = SelectObject(mem_dc, hbitmap);
-
-        let blend = BLENDFUNCTION {
-            BlendOp: AC_SRC_OVER as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: AC_SRC_ALPHA as u8,
-        };
-
-        AlphaBlend(
-            hdc_dest, dest_x, dest_y, w, h,
-            mem_dc, 0, 0, w, h,
-            blend,
-        );
-
-        SelectObject(mem_dc, old_bm);
-        DeleteObject(hbitmap);
-    }
-    DeleteDC(mem_dc);
 }
 
 unsafe fn create_font(size: i32, weight: i32) -> HFONT {
