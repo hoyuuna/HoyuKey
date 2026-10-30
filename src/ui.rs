@@ -4,7 +4,8 @@ use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, POINT, RECT
 use windows_sys::Win32::Graphics::Gdi::{
     AddFontMemResourceEx, AddFontResourceExW, BeginPaint, BitBlt, CreateCompatibleBitmap,
     CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint, InvalidateRect, ScreenToClient,
-    SelectObject, PAINTSTRUCT, SRCCOPY,
+    SelectObject, StretchBlt, SetStretchBltMode, GetDIBits, SetDIBits, BITMAPINFO, BITMAPINFOHEADER,
+    BI_RGB, DIB_RGB_COLORS, HALFTONE, PAINTSTRUCT, SRCCOPY,
 };
 use windows_sys::Win32::Graphics::GdiPlus::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -42,6 +43,24 @@ static TRANSITION_DIR: AtomicI32 = AtomicI32::new(0);         // 1: sang trái, 
 // Quản lý hover item
 static HOVER_ITEM: AtomicI32 = AtomicI32::new(-1);
 
+// Quản lý hoạt họa Modal Popup (Bật ra mượt mà 0 đến 1000)
+static MODAL_ANIM_PROGRESS: AtomicU32 = AtomicU32::new(0);
+
+pub fn trigger_modal_open(hwnd: HWND) {
+    MODAL_ANIM_PROGRESS.store(0, Ordering::SeqCst);
+    unsafe {
+        SetTimer(hwnd, TIMER_ID_ANIM, 16, None);
+        InvalidateRect(hwnd, null_mut(), 0);
+    }
+}
+
+pub fn close_modal_anim(hwnd: HWND) {
+    MODAL_ANIM_PROGRESS.store(0, Ordering::SeqCst);
+    unsafe {
+        InvalidateRect(hwnd, null_mut(), 0);
+    }
+}
+
 // Nhúng trực tiếp font Google Sans
 const FONT_GOOGLE_SANS_REGULAR: &[u8] = include_bytes!("../fonts/GoogleSans-Regular.ttf");
 const FONT_GOOGLE_SANS_BOLD: &[u8] = include_bytes!("../fonts/GoogleSans-Bold.ttf");
@@ -67,7 +86,6 @@ const ARGB_TEXT_DARK: u32 = 0xFF09090B;       // #09090b
 const ARGB_DANGER_TEXT: u32 = 0xFFEF4444;     // #ef4444
 const ARGB_DANGER_BORDER: u32 = 0xFF3F1D1D;   // #3f1d1d
 const ARGB_DANGER_HOVER: u32 = 0xFF2D1515;    // #2d1515
-const ARGB_MODAL_OVERLAY: u32 = 0xBB000000;   // Lớp phủ blur nền 75%
 const ARGB_MODAL_BG: u32 = 0xFF16161A;        // Nền modal
 const ARGB_MODAL_BORDER: u32 = 0xFF2E2E34;    // Viền modal
 
@@ -321,6 +339,18 @@ unsafe extern "system" fn settings_wnd_proc(
                     SWITCH_KEY_PROGRESS.store(next, Ordering::SeqCst);
                 }
 
+                // 6. Modal Popup Pop-out Animation
+                let modal_state = crate::updater::MODAL_STATE.load(Ordering::SeqCst);
+                if modal_state > 0 {
+                    let curr_modal_anim = MODAL_ANIM_PROGRESS.load(Ordering::SeqCst);
+                    if curr_modal_anim < 1000 {
+                        still_animating = true;
+                        let step = ((1000 - curr_modal_anim) / 3).max(30);
+                        let next = (curr_modal_anim + step).min(1000);
+                        MODAL_ANIM_PROGRESS.store(next, Ordering::SeqCst);
+                    }
+                }
+
                 InvalidateRect(hwnd, null_mut(), 0);
 
                 if !still_animating {
@@ -471,7 +501,9 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             // Giới thiệu: Nút Kiểm tra cập nhật
             let btn_update_w = 240;
             let btn_update_x = card_x + (card_w - btn_update_w) / 2;
-            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y >= 286 && y <= 330 {
+            let btn_update_y = 250;
+            let btn_update_h = 42;
+            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y >= btn_update_y && y <= btn_update_y + btn_update_h {
                 return 25;
             }
         }
@@ -616,7 +648,9 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             // Nút Kiểm tra cập nhật
             let btn_update_w = 240;
             let btn_update_x = card_x + (card_w - btn_update_w) / 2;
-            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y >= 286 && y <= 330 {
+            let btn_update_y = 250;
+            let btn_update_h = 42;
+            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y >= btn_update_y && y <= btn_update_y + btn_update_h {
                 drop(state);
                 crate::updater::start_checking_update(hwnd);
                 return;
@@ -638,6 +672,9 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
 }
 
 fn start_page_transition(hwnd: HWND, target_page: u8, direction: i32) {
+    if target_page == 3 {
+        crate::updater::ensure_changelog_loaded(hwnd);
+    }
     TARGET_PAGE.store(target_page, Ordering::SeqCst);
     TRANSITION_DIR.store(direction, Ordering::SeqCst);
     TRANSITION_PROGRESS.store(0, Ordering::SeqCst);
@@ -825,13 +862,34 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     draw_gdip_text_centered(graphics, font_btn, "Đóng", btn_close_x, btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
 
     // ========================================================
-    // 🌟 CUSTOM MODAL POPUP (BLUR NỀN, BO GÓC, KHÔNG DÙNG WINDOWS POPUP)
+    // 🌟 CUSTOM MODAL POPUP (REAL BLUR NỀN, BO GÓC, POP-OUT ANIMATION)
     // ========================================================
     let modal_state = crate::updater::MODAL_STATE.load(Ordering::SeqCst);
     if modal_state > 0 {
-        // 1. Phủ mờ/tối toàn bộ nền giao diện (Backdrop Blur/Dim)
+        // 1. Commit and delete current GDI+ graphics to flush DC
+        GdipDeleteGraphics(graphics);
+
+        // 2. Thực hiện Real Gaussian/Box Blur lên toàn bộ giao diện phía sau
+        apply_screen_blur(dc, w, h);
+
+        // 3. Khởi tạo lại GDI+ Graphics trên DC đã làm mờ thật sự
+        GdipCreateFromHDC(dc, &mut graphics);
+        GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
+        GdipSetInterpolationMode(graphics, InterpolationModeHighQualityBicubic);
+        GdipSetPixelOffsetMode(graphics, PixelOffsetModeHighQuality);
+        GdipSetTextRenderingHint(graphics, TextRenderingHintClearTypeGridFit);
+
+        // 4. Animation Bật Ra (Pop-out spring scale & fade)
+        let anim_p = MODAL_ANIM_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+        let ease = 1.0 - (1.0 - anim_p).powi(3);
+        let scale = 0.82 + 0.18 * ease; // Pop mượt mà từ 82% lên 100%
+
+        // Lớp kính mờ tối (Dark Frosted Glass Tint)
+        let overlay_alpha = (0x99 as f32 * ease).round() as u32;
+        let overlay_color = (overlay_alpha << 24) | 0x09090b;
+
         let mut overlay_brush: *mut GpSolidFill = null_mut();
-        GdipCreateSolidFill(ARGB_MODAL_OVERLAY, &mut overlay_brush);
+        GdipCreateSolidFill(overlay_color, &mut overlay_brush);
         let mut overlay_path: *mut GpPath = null_mut();
         GdipCreatePath(FillModeAlternate, &mut overlay_path);
         GdipAddPathLine(overlay_path, 0.0, 0.0, w as f32, 0.0);
@@ -842,65 +900,74 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
         GdipDeletePath(overlay_path);
         GdipDeleteBrush(overlay_brush as *mut GpBrush);
 
-        // 2. Card Modal bo góc ở giữa màn hình
-        let modal_w = 400;
-        let modal_h = 230;
+        // 5. Card Modal bo góc bật ra ở giữa màn hình
+        let base_modal_w = 400.0;
+        let base_modal_h = 230.0;
+        let modal_w = (base_modal_w * scale).round() as i32;
+        let modal_h = (base_modal_h * scale).round() as i32;
         let modal_x = (w - modal_w) / 2;
         let modal_y = (h - modal_h) / 2;
+
         gdiplus_draw_rounded_card(graphics, modal_x, modal_y, modal_w, modal_h, 14, ARGB_MODAL_BG, ARGB_MODAL_BORDER, 1.5);
 
-        let modal_btn_y = modal_y + 165;
+        let modal_btn_y = modal_y + (165.0 * scale).round() as i32;
+        let btn_h = (42.0 * scale).round() as i32;
 
         match modal_state {
             1 => {
                 // Đang kiểm tra cập nhật...
-                draw_gdip_text_centered(graphics, font_modal_title, "Đang kiểm tra cập nhật...", modal_x, modal_y + 60, modal_w, 32, ARGB_TEXT_PRIMARY);
-                draw_gdip_text_centered(graphics, font_desc, "Vui lòng đợi giây lát, đang kết nối máy chủ GitHub...", modal_x, modal_y + 100, modal_w, 24, ARGB_TEXT_MUTED);
+                draw_gdip_text_centered(graphics, font_modal_title, "Đang kiểm tra cập nhật...", modal_x, modal_y + (60.0 * scale).round() as i32, modal_w, 32, ARGB_TEXT_PRIMARY);
+                draw_gdip_text_centered(graphics, font_desc, "Vui lòng đợi giây lát, đang kết nối máy chủ GitHub...", modal_x, modal_y + (100.0 * scale).round() as i32, modal_w, 24, ARGB_TEXT_MUTED);
             }
             2 => {
                 // Phát hiện bản mới!
                 let tag = crate::updater::LATEST_VERSION_TAG.lock().unwrap().clone();
-                draw_gdip_text_centered(graphics, font_modal_title, "Đã có bản cập nhật mới!", modal_x, modal_y + 35, modal_w, 32, ARGB_TEXT_PRIMARY);
+                draw_gdip_text_centered(graphics, font_modal_title, "Đã có bản cập nhật mới!", modal_x, modal_y + (35.0 * scale).round() as i32, modal_w, 32, ARGB_TEXT_PRIMARY);
 
                 let desc = format!("Phiên bản {} đã sẵn sàng. Bạn có muốn tải xuống và cài đặt trực tiếp ngay bây giờ không?", tag);
-                draw_gdip_text_multiline(graphics, font_desc, &desc, modal_x + 30, modal_y + 75, modal_w - 60, 60, ARGB_TEXT_MUTED);
+                draw_gdip_text_multiline(graphics, font_desc, &desc, modal_x + (30.0 * scale).round() as i32, modal_y + (75.0 * scale).round() as i32, modal_w - (60.0 * scale).round() as i32, 60, ARGB_TEXT_MUTED);
 
                 // Nút "Để sau" (trái): ID 51
+                let btn_w = (166.0 * scale).round() as i32;
+                let cancel_x = modal_x + (24.0 * scale).round() as i32;
                 let cancel_bg = if hover_id == 51 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-                gdiplus_draw_rounded_card(graphics, modal_x + 24, modal_btn_y, 166, 42, 8, cancel_bg, ARGB_CARD_BORDER, 1.0);
-                draw_gdip_text_centered(graphics, font_btn, "Để sau", modal_x + 24, modal_btn_y, 166, 42, ARGB_TEXT_MUTED);
+                gdiplus_draw_rounded_card(graphics, cancel_x, modal_btn_y, btn_w, btn_h, 8, cancel_bg, ARGB_CARD_BORDER, 1.0);
+                draw_gdip_text_centered(graphics, font_btn, "Để sau", cancel_x, modal_btn_y, btn_w, btn_h, ARGB_TEXT_MUTED);
 
                 // Nút "Cập nhật ngay" (phải): ID 50
+                let update_x = modal_x + (210.0 * scale).round() as i32;
                 let update_bg = if hover_id == 50 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
-                gdiplus_draw_rounded_card(graphics, modal_x + 210, modal_btn_y, 166, 42, 8, update_bg, ARGB_WHITE, 1.0);
-                draw_gdip_text_centered(graphics, font_btn, "Cập nhật ngay", modal_x + 210, modal_btn_y, 166, 42, ARGB_TEXT_DARK);
+                gdiplus_draw_rounded_card(graphics, update_x, modal_btn_y, btn_w, btn_h, 8, update_bg, ARGB_WHITE, 1.0);
+                draw_gdip_text_centered(graphics, font_btn, "Cập nhật ngay", update_x, modal_btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
             }
             3 => {
                 // Đang tải cập nhật...
-                draw_gdip_text_centered(graphics, font_modal_title, "Đang tải bản cập nhật...", modal_x, modal_y + 60, modal_w, 32, ARGB_TEXT_PRIMARY);
-                draw_gdip_text_centered(graphics, font_desc, "HoyuKey sẽ tự động khởi động lại sau khi tải xong.", modal_x, modal_y + 100, modal_w, 24, ARGB_TEXT_MUTED);
+                draw_gdip_text_centered(graphics, font_modal_title, "Đang tải bản cập nhật...", modal_x, modal_y + (60.0 * scale).round() as i32, modal_w, 32, ARGB_TEXT_PRIMARY);
+                draw_gdip_text_centered(graphics, font_desc, "HoyuKey sẽ tự động khởi động lại sau khi tải xong.", modal_x, modal_y + (100.0 * scale).round() as i32, modal_w, 24, ARGB_TEXT_MUTED);
             }
             4 => {
                 // Bản mới nhất!
-                draw_gdip_text_centered(graphics, font_modal_title, "Bạn đang dùng bản mới nhất!", modal_x, modal_y + 40, modal_w, 32, ARGB_TEXT_PRIMARY);
+                draw_gdip_text_centered(graphics, font_modal_title, "Bạn đang dùng bản mới nhất!", modal_x, modal_y + (40.0 * scale).round() as i32, modal_w, 32, ARGB_TEXT_PRIMARY);
                 let desc = format!("HoyuKey v{} là phiên bản mới nhất trên GitHub.", crate::updater::CURRENT_VERSION);
-                draw_gdip_text_centered(graphics, font_desc, &desc, modal_x, modal_y + 85, modal_w, 24, ARGB_TEXT_MUTED);
+                draw_gdip_text_centered(graphics, font_desc, &desc, modal_x, modal_y + (85.0 * scale).round() as i32, modal_w, 24, ARGB_TEXT_MUTED);
 
                 // Nút "Đã hiểu": ID 50
-                let ok_btn_x = modal_x + (modal_w - 160) / 2;
+                let btn_w = (160.0 * scale).round() as i32;
+                let ok_btn_x = modal_x + (modal_w - btn_w) / 2;
                 let ok_bg = if hover_id == 50 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
-                gdiplus_draw_rounded_card(graphics, ok_btn_x, modal_btn_y, 160, 42, 8, ok_bg, ARGB_WHITE, 1.0);
-                draw_gdip_text_centered(graphics, font_btn, "Đã hiểu", ok_btn_x, modal_btn_y, 160, 42, ARGB_TEXT_DARK);
+                gdiplus_draw_rounded_card(graphics, ok_btn_x, modal_btn_y, btn_w, btn_h, 8, ok_bg, ARGB_WHITE, 1.0);
+                draw_gdip_text_centered(graphics, font_btn, "Đã hiểu", ok_btn_x, modal_btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
             }
             5 => {
                 // Lỗi kết nối
-                draw_gdip_text_centered(graphics, font_modal_title, "Không thể kiểm tra cập nhật", modal_x, modal_y + 40, modal_w, 32, ARGB_DANGER_TEXT);
-                draw_gdip_text_centered(graphics, font_desc, "Vui lòng kiểm tra lại kết nối mạng Internet của bạn.", modal_x, modal_y + 85, modal_w, 24, ARGB_TEXT_MUTED);
+                draw_gdip_text_centered(graphics, font_modal_title, "Không thể kiểm tra cập nhật", modal_x, modal_y + (40.0 * scale).round() as i32, modal_w, 32, ARGB_DANGER_TEXT);
+                draw_gdip_text_centered(graphics, font_desc, "Vui lòng kiểm tra lại kết nối mạng Internet của bạn.", modal_x, modal_y + (85.0 * scale).round() as i32, modal_w, 24, ARGB_TEXT_MUTED);
 
-                let ok_btn_x = modal_x + (modal_w - 160) / 2;
+                let btn_w = (160.0 * scale).round() as i32;
+                let ok_btn_x = modal_x + (modal_w - btn_w) / 2;
                 let ok_bg = if hover_id == 50 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
-                gdiplus_draw_rounded_card(graphics, ok_btn_x, modal_btn_y, 160, 42, 8, ok_bg, ARGB_WHITE, 1.0);
-                draw_gdip_text_centered(graphics, font_btn, "Đã hiểu", ok_btn_x, modal_btn_y, 160, 42, ARGB_TEXT_DARK);
+                gdiplus_draw_rounded_card(graphics, ok_btn_x, modal_btn_y, btn_w, btn_h, 8, ok_bg, ARGB_WHITE, 1.0);
+                draw_gdip_text_centered(graphics, font_btn, "Đã hiểu", ok_btn_x, modal_btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
             }
             _ => {}
         }
@@ -1078,8 +1145,8 @@ unsafe fn render_page_elements(
             // --- Trang Giới thiệu (Tối giản: Logo, Tên, Phiên bản, Nút Kiểm tra, Changelog) ---
             draw_gdip_text(graphics, font_sub_title, "Giới thiệu", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
 
-            // Card 1: Logo, Tên & Nút Kiểm tra Cập nhật (y = 86..336, cao 250px)
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 250, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            // Card 1: Logo, Tên & Nút Kiểm tra Cập nhật (y = 86..304, cao 218px)
+            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 218, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             let center_x = card_x + card_w / 2;
             gdiplus_draw_image(graphics, center_x - 30, 104, 60, 60, LOGO_BGRA_128, 128, 128);
@@ -1099,22 +1166,39 @@ unsafe fn render_page_elements(
             gdiplus_draw_rounded_card(graphics, btn_update_x, btn_update_y, btn_update_w, btn_update_h, 8, update_btn_bg, ARGB_WHITE, 1.0);
             draw_gdip_text_centered(graphics, font_btn, "Kiểm tra cập nhật", btn_update_x, btn_update_y, btn_update_w, btn_update_h, ARGB_TEXT_DARK);
 
-            // Card 2: Changelog Nhật ký thay đổi (y = 352..556, cao 204px)
-            gdiplus_draw_rounded_card(graphics, card_x, 352, card_w, 204, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-            draw_gdip_text(graphics, font_section, "NHẬT KÝ THAY ĐỔI (CHANGELOG)", left_text, 368, ARGB_STATUS_MUTED, false);
+            // Card 2: Changelog Nhật ký thay đổi (Lấy động trực tiếp từ GitHub Releases)
+            let cl_y = 316;
+            let cl_h = 244;
+            gdiplus_draw_rounded_card(graphics, card_x, cl_y, card_w, cl_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            draw_gdip_text(graphics, font_section, "NHẬT KÝ THAY ĐỔI (CHANGELOG)", left_text, cl_y + 16, ARGB_STATUS_MUTED, false);
 
-            let log_items = [
-                "• Bỏ dấu & thêm mũ Telex tự do bất kỳ lúc nào (hienej -> hiện)",
-                "• Tự động nhận diện từ tiếng Anh không gõ nhầm (fix, file, wifi)",
-                "• Sửa dứt điểm lỗi nhạy cảm Backspace sau dấu câu (luôn,)",
-                "• Tương thích mượt mà trình duyệt Chrome, Edge & ứng dụng văn phòng",
-                "• Dashboard chuẩn smartphone với animation trượt mượt mà 60 FPS",
-            ];
+            let raw_changelog = crate::updater::CHANGELOG_BODY.lock().unwrap().clone();
+            let changelog_text = if raw_changelog.is_empty() {
+                "• Đang tải nhật ký thay đổi từ GitHub...".to_string()
+            } else {
+                raw_changelog
+            };
 
-            let mut log_y = 398;
-            for item in log_items {
-                draw_gdip_text(graphics, font_desc, item, left_text, log_y, ARGB_TEXT_PRIMARY, false);
+            let mut log_y = cl_y + 42;
+            for line in changelog_text.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let display_line = if trimmed.starts_with('#') {
+                    trimmed.trim_start_matches('#').trim().to_string()
+                } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                    format!("• {}", &trimmed[2..])
+                } else if trimmed.starts_with("•") {
+                    trimmed.to_string()
+                } else {
+                    format!("• {}", trimmed)
+                };
+                draw_gdip_text(graphics, font_desc, &display_line, left_text, log_y, ARGB_TEXT_PRIMARY, false);
                 log_y += 26;
+                if log_y > cl_y + cl_h - 26 {
+                    break;
+                }
             }
         }
     }
@@ -1538,6 +1622,117 @@ unsafe fn draw_gdip_text_multiline(
 
     GdipDeleteBrush(brush as *mut GpBrush);
     GdipDeleteStringFormat(format);
+}
+
+fn fast_box_blur_32(pixels: &mut [u32], w: usize, h: usize, radius: usize) {
+    if w == 0 || h == 0 || radius == 0 {
+        return;
+    }
+    let mut temp = vec![0u32; pixels.len()];
+
+    for _pass in 0..2 {
+        for y in 0..h {
+            let row_offset = y * w;
+            for x in 0..w {
+                let x_start = x.saturating_sub(radius);
+                let x_end = (x + radius).min(w - 1);
+                let count = (x_end - x_start + 1) as u32;
+
+                let mut r_sum = 0u32;
+                let mut g_sum = 0u32;
+                let mut b_sum = 0u32;
+
+                for ix in x_start..=x_end {
+                    let px = pixels[row_offset + ix];
+                    r_sum += (px >> 16) & 0xFF;
+                    g_sum += (px >> 8) & 0xFF;
+                    b_sum += px & 0xFF;
+                }
+
+                temp[row_offset + x] = 0xFF000000
+                    | ((r_sum / count) << 16)
+                    | ((g_sum / count) << 8)
+                    | (b_sum / count);
+            }
+        }
+
+        for x in 0..w {
+            for y in 0..h {
+                let y_start = y.saturating_sub(radius);
+                let y_end = (y + radius).min(h - 1);
+                let count = (y_end - y_start + 1) as u32;
+
+                let mut r_sum = 0u32;
+                let mut g_sum = 0u32;
+                let mut b_sum = 0u32;
+
+                for iy in y_start..=y_end {
+                    let px = temp[iy * w + x];
+                    r_sum += (px >> 16) & 0xFF;
+                    g_sum += (px >> 8) & 0xFF;
+                    b_sum += px & 0xFF;
+                }
+
+                pixels[y * w + x] = 0xFF000000
+                    | ((r_sum / count) << 16)
+                    | ((g_sum / count) << 8)
+                    | (b_sum / count);
+            }
+        }
+    }
+}
+
+unsafe fn apply_screen_blur(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h: i32) {
+    let scale_down = 4;
+    let sw = (w / scale_down).max(1);
+    let sh = (h / scale_down).max(1);
+
+    let s_dc = CreateCompatibleDC(dc);
+    let s_bm = CreateCompatibleBitmap(dc, sw, sh);
+    let old_bm = SelectObject(s_dc, s_bm);
+
+    SetStretchBltMode(s_dc, HALFTONE);
+    StretchBlt(s_dc, 0, 0, sw, sh, dc, 0, 0, w, h, SRCCOPY);
+
+    let mut bmi: BITMAPINFO = std::mem::zeroed();
+    bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = sw;
+    bmi.bmiHeader.biHeight = -sh;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    let pixel_count = (sw * sh) as usize;
+    let mut pixels: Vec<u32> = vec![0; pixel_count];
+
+    GetDIBits(
+        s_dc,
+        s_bm,
+        0,
+        sh as u32,
+        pixels.as_mut_ptr() as *mut _,
+        &mut bmi,
+        DIB_RGB_COLORS,
+    );
+
+    fast_box_blur_32(&mut pixels, sw as usize, sh as usize, 3);
+
+    SetDIBits(
+        s_dc,
+        s_bm,
+        0,
+        sh as u32,
+        pixels.as_ptr() as *const _,
+        &bmi,
+        DIB_RGB_COLORS,
+    );
+
+    SetStretchBltMode(dc, HALFTONE);
+    StretchBlt(dc, 0, 0, w, h, s_dc, 0, 0, sw, sh, SRCCOPY);
+
+    SelectObject(s_dc, old_bm);
+    DeleteObject(s_bm);
+    DeleteDC(s_dc);
 }
 
 fn to_wide(s: &str) -> Vec<u16> {

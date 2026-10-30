@@ -1,5 +1,5 @@
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::InvalidateRect;
@@ -21,18 +21,52 @@ pub static MODAL_STATE: AtomicU8 = AtomicU8::new(0);
 
 pub static LATEST_VERSION_TAG: Mutex<String> = Mutex::new(String::new());
 pub static LATEST_DOWNLOAD_URL: Mutex<String> = Mutex::new(String::new());
+pub static CHANGELOG_BODY: Mutex<String> = Mutex::new(String::new());
+static IS_FETCHING_CHANGELOG: AtomicBool = AtomicBool::new(false);
+
+pub fn ensure_changelog_loaded(hwnd: HWND) {
+    {
+        let log = CHANGELOG_BODY.lock().unwrap();
+        if !log.is_empty() {
+            return;
+        }
+    }
+
+    if IS_FETCHING_CHANGELOG.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    *CHANGELOG_BODY.lock().unwrap() = "• Đang tải nhật ký thay đổi từ GitHub...".to_string();
+    let hwnd_raw = hwnd as isize;
+
+    std::thread::spawn(move || {
+        let hwnd = hwnd_raw as HWND;
+        match fetch_latest_release_info() {
+            Ok((_tag, _url, body)) => {
+                *CHANGELOG_BODY.lock().unwrap() = body;
+            }
+            Err(_) => {
+                *CHANGELOG_BODY.lock().unwrap() =
+                    "• Chưa thể tải nhật ký từ GitHub (Repo đang ở chế độ Private hoặc offline).\n• Bản phát hành chính thức sẽ tự động đồng bộ từ GitHub Releases.".to_string();
+            }
+        }
+        IS_FETCHING_CHANGELOG.store(false, Ordering::SeqCst);
+        unsafe {
+            InvalidateRect(hwnd, null_mut(), 0);
+        }
+    });
+}
 
 pub fn start_checking_update(hwnd: HWND) {
     MODAL_STATE.store(1, Ordering::SeqCst);
-    unsafe {
-        InvalidateRect(hwnd, null_mut(), 0);
-    }
+    crate::ui::trigger_modal_open(hwnd);
 
     let hwnd_raw = hwnd as isize;
     std::thread::spawn(move || {
         let hwnd = hwnd_raw as HWND;
         match fetch_latest_release_info() {
-            Ok((latest_tag, download_url)) => {
+            Ok((latest_tag, download_url, body)) => {
+                *CHANGELOG_BODY.lock().unwrap() = body;
                 let clean_latest = latest_tag.trim_start_matches('v').trim();
                 let clean_current = CURRENT_VERSION.trim_start_matches('v').trim();
 
@@ -56,9 +90,7 @@ pub fn start_checking_update(hwnd: HWND) {
 
 pub fn start_downloading_update(hwnd: HWND) {
     MODAL_STATE.store(3, Ordering::SeqCst);
-    unsafe {
-        InvalidateRect(hwnd, null_mut(), 0);
-    }
+    crate::ui::trigger_modal_open(hwnd);
 
     let download_url = LATEST_DOWNLOAD_URL.lock().unwrap().clone();
     let hwnd_raw = hwnd as isize;
@@ -71,12 +103,10 @@ pub fn start_downloading_update(hwnd: HWND) {
 
 pub fn close_modal(hwnd: HWND) {
     MODAL_STATE.store(0, Ordering::SeqCst);
-    unsafe {
-        InvalidateRect(hwnd, null_mut(), 0);
-    }
+    crate::ui::close_modal_anim(hwnd);
 }
 
-fn fetch_latest_release_info() -> Result<(String, String), String> {
+fn fetch_latest_release_info() -> Result<(String, String, String), String> {
     let url = "https://api.github.com/repos/hoyuuna/HoyuKey/releases/latest";
     let json_bytes = http_get(url)?;
     let json_str = String::from_utf8_lossy(&json_bytes);
@@ -87,7 +117,52 @@ fn fetch_latest_release_info() -> Result<(String, String), String> {
     let download_url = extract_download_url(&json_str)
         .ok_or_else(|| "Không tìm thấy file tải về HoyuKey.exe".to_string())?;
 
-    Ok((tag_name, download_url))
+    let body = extract_json_body(&json_str).unwrap_or_else(|| {
+        "• Bản cập nhật mới nhất cho HoyuKey với nhiều tối ưu và sửa lỗi.".to_string()
+    });
+
+    Ok((tag_name, download_url, body))
+}
+
+fn extract_json_body(json: &str) -> Option<String> {
+    let key = "\"body\":";
+    let start_idx = json.find(key)? + key.len();
+    let sub = json[start_idx..].trim_start();
+    if !sub.starts_with('"') {
+        return None;
+    }
+    let chars: Vec<char> = sub[1..].chars().collect();
+    let mut result = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '\\' && i + 1 < chars.len() {
+            let next = chars[i + 1];
+            match next {
+                'n' => result.push('\n'),
+                'r' => {},
+                't' => result.push('\t'),
+                '\\' => result.push('\\'),
+                '"' => result.push('"'),
+                _ => {
+                    result.push('\\');
+                    result.push(next);
+                }
+            }
+            i += 2;
+        } else if ch == '"' {
+            break;
+        } else {
+            result.push(ch);
+            i += 1;
+        }
+    }
+    let trimmed = result.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn extract_json_field(json: &str, field: &str) -> Option<String> {
