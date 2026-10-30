@@ -948,17 +948,28 @@ mod tests {
         let mut engine = Engine::new();
         let config = Config::default();
 
-        // CapsLock bật: gõ 'D', 'A', 'S' -> 'DÁ'
+        // 1. CapsLock bật: gõ 'D', 'A', 'S' -> 'DÁ'
         engine.process_char('D', &config);
         engine.process_char('A', &config);
         let a = engine.process_char('S', &config);
         assert_eq!(a, KeyAction::Transform { backspaces: 2, text: "DÁ".to_string() });
         assert_eq!(engine.current_word, "DÁ");
 
-        // Ấn tiếp 'S' -> phải ra "DAS" viết HOA hoàn toàn, không được ra "DAs"!
+        // Vẫn giữ CapsLock gõ tiếp 'S' -> ra "DAS"
         let a2 = engine.process_char('S', &config);
         assert_eq!(a2, KeyAction::Transform { backspaces: 2, text: "DAS".to_string() });
         assert_eq!(engine.current_word, "DAS");
+
+        // 2. Nếu từ đang là "DÁ", nhưng người dùng tắt CapsLock rồi gõ 's' thường -> ra "DAs"
+        engine.reset();
+        engine.process_char('D', &config);
+        engine.process_char('A', &config);
+        engine.process_char('S', &config);
+        assert_eq!(engine.current_word, "DÁ");
+
+        let a3 = engine.process_char('s', &config);
+        assert_eq!(a3, KeyAction::Transform { backspaces: 2, text: "DAs".to_string() });
+        assert_eq!(engine.current_word, "DAs");
     }
 
     #[test]

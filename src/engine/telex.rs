@@ -372,7 +372,7 @@ pub fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<
         }
     }
 
-    // 1. Hoàn tác nếu gõ lặp lại cùng phím dấu thanh (ví dụ 'toán' + 's' -> 'toans', 'DÁ' + 'S' -> 'DAS')
+    // 1. Hoàn tác nếu gõ lặp lại cùng phím dấu thanh (ví dụ 'toán' + 's' -> 'toans', 'DÁ' + 'S' -> 'DAS', 'DÁ' + 's' -> 'DAs')
     if target_tone == current_tone && target_tone != Tone::None {
         let mut new_chars = chars.clone();
         for &idx in &vowel_indices {
@@ -380,13 +380,7 @@ pub fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<
             let restored = get_vietnamese_vowel(base, vmod, Tone::None)?;
             new_chars[idx] = if is_upper { restored.to_uppercase().next().unwrap_or(restored) } else { restored };
         }
-        let is_all_upper = chars.iter().all(|c| !c.is_alphabetic() || c.is_uppercase());
-        let push_key = if is_all_upper || key.is_uppercase() {
-            key.to_ascii_uppercase()
-        } else {
-            key.to_ascii_lowercase()
-        };
-        new_chars.push(push_key);
+        new_chars.push(key);
         return Some(new_chars.into_iter().collect());
     }
 
