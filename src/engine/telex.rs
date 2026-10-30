@@ -4,9 +4,9 @@ pub fn transform_telex(word: &str, key: char, modern_tone: bool) -> Option<Strin
     let key_lower = key.to_ascii_lowercase();
     let is_key_upper = key.is_ascii_uppercase();
 
-    // Nếu từ hiện tại là từ đa âm tiết tiếng Anh / nước ngoài (chứa nhiều cụm nguyên âm riêng biệt)
-    // thì không can thiệp biến đổi để tránh làm hỏng từ tiếng Anh (ví dụ "animation", "computer", "windows")
-    if is_foreign_multisyllable_word(word) {
+    // Nếu từ hiện tại là từ ngoại lai (bắt đầu bằng f, j, z hoặc từ đa âm tiết như animation, computer, fix, wifi)
+    // thì không can thiệp biến đổi để tránh làm hỏng từ tiếng Anh
+    if is_foreign_word(word) {
         return None;
     }
 
@@ -32,6 +32,29 @@ pub fn transform_telex(word: &str, key: char, modern_tone: bool) -> Option<Strin
     }
 
     None
+}
+
+/// Kiểm tra từ có phải là từ tiếng Anh / ngoại quốc hay không:
+/// 1. Bắt đầu bằng phụ âm ngoại lai không có trong tiếng Việt (f, j, z, hoặc w + nguyên âm như wifi, web)
+/// 2. Hoặc từ đa âm tiết có nhiều cụm nguyên âm tách rời (như animation, computer, windows)
+pub fn is_foreign_word(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.is_empty() {
+        return false;
+    }
+
+    let first = chars[0].to_ascii_lowercase();
+    if matches!(first, 'f' | 'j' | 'z') {
+        return true;
+    }
+    if first == 'w' && chars.len() > 1 {
+        let second = chars[1].to_ascii_lowercase();
+        if decompose_vietnamese_char(second).is_some() {
+            return true;
+        }
+    }
+
+    is_foreign_multisyllable_word(word)
 }
 
 /// Kiểm tra từ có phải là từ đa âm tiết tiếng Anh / nước ngoài hay không.

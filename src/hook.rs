@@ -259,14 +259,42 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
     }
 }
 
-/// Gửi chuỗi Backspace và Unicode Text.
-/// Tách nhịp 1ms sau Backspace giúp trình duyệt (Chrome, Edge...) xử lý xong DOM delete, tránh lỗi `aả`!
+/// Gửi chuỗi Backspace và Unicode Text nguyên tử (Atomic SendInput).
+/// Sử dụng kỹ thuật Zero-Width Space (U+200B) đệm để phá vỡ vùng chọn gợi ý (inline autocomplete selection)
+/// của Google Chrome / Chromium / Edge / Excel, xóa dứt điểm lỗi `ar` -> `aả`, `dd` -> `dđ`, `oo` -> `oô`!
 unsafe fn send_transform_batch(backspaces: usize, text: &str) {
     let backspace_scan = MapVirtualKeyW(VK_BACK as u32, 0) as u16;
+    let mut inputs = Vec::new();
 
     if backspaces > 0 {
-        let mut bs_inputs = Vec::with_capacity(backspaces * 2);
-        for _ in 0..backspaces {
+        // 1. Gửi ký tự Zero-Width Space (U+200B) đệm:
+        // Nếu trình duyệt đang có vùng bôi đen gợi ý (Omnibox, Search box), ký tự này sẽ thế chỗ và ngắt ngay selection!
+        const ZWS_CHAR: u16 = 0x200B;
+        let mut zws_down: INPUT = std::mem::zeroed();
+        zws_down.r#type = INPUT_KEYBOARD;
+        zws_down.Anonymous.ki = KEYBDINPUT {
+            wVk: 0,
+            wScan: ZWS_CHAR,
+            dwFlags: KEYEVENTF_UNICODE,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(zws_down);
+
+        let mut zws_up: INPUT = std::mem::zeroed();
+        zws_up.r#type = INPUT_KEYBOARD;
+        zws_up.Anonymous.ki = KEYBDINPUT {
+            wVk: 0,
+            wScan: ZWS_CHAR,
+            dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(zws_up);
+
+        // 2. Gửi (backspaces + 1) phím Backspace:
+        // Phím đầu tiên xóa ZWS, các phím sau xóa sạch các ký tự gốc cần biến đổi
+        for _ in 0..=backspaces {
             let mut down: INPUT = std::mem::zeroed();
             down.r#type = INPUT_KEYBOARD;
             down.Anonymous.ki = KEYBDINPUT {
@@ -276,7 +304,7 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
                 time: 0,
                 dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
             };
-            bs_inputs.push(down);
+            inputs.push(down);
 
             let mut up: INPUT = std::mem::zeroed();
             up.r#type = INPUT_KEYBOARD;
@@ -287,20 +315,11 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
                 time: 0,
                 dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
             };
-            bs_inputs.push(up);
+            inputs.push(up);
         }
-
-        SendInput(
-            bs_inputs.len() as u32,
-            bs_inputs.as_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        );
-
-        // Nhịp nghỉ 1ms cho phép message loop của Chromium xử lý xong việc xóa ký tự cũ trong DOM
-        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
-    let mut uni_inputs = Vec::new();
+    // 3. Bơm chuỗi Unicode tiếng Việt mới
     for c in text.encode_utf16() {
         let mut down: INPUT = std::mem::zeroed();
         down.r#type = INPUT_KEYBOARD;
@@ -311,7 +330,7 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
-        uni_inputs.push(down);
+        inputs.push(down);
 
         let mut up: INPUT = std::mem::zeroed();
         up.r#type = INPUT_KEYBOARD;
@@ -322,13 +341,14 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
-        uni_inputs.push(up);
+        inputs.push(up);
     }
 
-    if !uni_inputs.is_empty() {
+    // Gửi toàn bộ atomic trong 1 lệnh duy nhất, hệ điều hành xử lý tức thì không có độ trễ
+    if !inputs.is_empty() {
         SendInput(
-            uni_inputs.len() as u32,
-            uni_inputs.as_ptr(),
+            inputs.len() as u32,
+            inputs.as_ptr(),
             std::mem::size_of::<INPUT>() as i32,
         );
     }

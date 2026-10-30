@@ -130,7 +130,7 @@ impl Engine {
         // 2. Tự động tái cân bằng vị trí dấu thanh (Dynamic Tone Re-balancing):
         // Nếu từ hiện tại đã có dấu thanh (ví dụ "khí" có dấu sắc), mà người dùng gõ thêm nguyên âm (như 'o', 'a'),
         // hệ thống tự động gỡ dấu cũ và tái định vị dấu thanh đúng quy tắc ngữ âm ("khoái" thay vì "khoaí")!
-        if c.is_ascii_alphabetic() && !telex::is_foreign_multisyllable_word(&self.current_word) {
+        if c.is_ascii_alphabetic() && !telex::is_foreign_word(&self.current_word) {
             let existing_tone = find_existing_tone(&self.current_word);
             if existing_tone != Tone::None {
                 // Tách dấu thanh cũ ra
@@ -369,6 +369,18 @@ mod tests {
             }
         );
         assert_eq!(engine.current_word, "đặt");
+    }
+
+    #[test]
+    fn test_telex_foreign_fix() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        for ch in "fix".chars() {
+            let action = engine.process_char(ch, &config);
+            assert_eq!(action, KeyAction::PassThrough);
+        }
+        assert_eq!(engine.current_word, "fix");
     }
 
     #[test]

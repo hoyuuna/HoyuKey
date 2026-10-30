@@ -33,12 +33,15 @@ static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
 
-// Quản lý trang giao diện (Phone Settings style)
+// Quản lý trang và hiệu ứng chuyển trang (Smooth Page Transition Animation như điện thoại thật)
 // 0: Trang chủ (Home)
 // 1: Cài đặt đánh máy (TypingSettings)
 // 2: Cài đặt HoyuKey (AppSettings)
 // 3: Giới thiệu (About)
 static CURRENT_PAGE: AtomicU8 = AtomicU8::new(0);
+static TARGET_PAGE: AtomicU8 = AtomicU8::new(0);
+static TRANSITION_PROGRESS: AtomicU32 = AtomicU32::new(1000); // 1000 = đứng yên
+static TRANSITION_DIR: AtomicI32 = AtomicI32::new(0);         // 1: vào trang con (trượt sang trái), -1: back về home (trượt sang phải)
 
 // Quản lý hover item (-1: không có, 10: status card, 11: menu typing, 12: menu app, 13: menu about, 20: back btn, 30: exit btn, 31: close btn)
 static HOVER_ITEM: AtomicI32 = AtomicI32::new(-1);
@@ -83,7 +86,7 @@ pub fn init_ui_subsystems() {
             GDIP_TOKEN.store(token, Ordering::SeqCst);
         }
 
-        // 2. Nạp font Google Sans trực tiếp từ bộ nhớ (độc lập, không cần cài đặt)
+        // 2. Nạp font Google Sans trực tiếp từ bộ nhớ
         let mut c_fonts: u32 = 0;
         AddFontMemResourceEx(
             FONT_GOOGLE_SANS_REGULAR.as_ptr() as _,
@@ -98,7 +101,6 @@ pub fn init_ui_subsystems() {
             &mut c_fonts,
         );
 
-        // Nạp thêm từ file thư mục fonts nếu có sẵn
         let p1 = to_wide("fonts\\GoogleSans-Regular.ttf");
         let p2 = to_wide("fonts\\GoogleSans-Bold.ttf");
         AddFontResourceExW(p1.as_ptr(), 0x10, null_mut());
@@ -265,7 +267,21 @@ unsafe extern "system" fn settings_wnd_proc(
 
                 let mut still_animating = false;
 
-                // 1. Modern Tone Switch animation
+                // 1. Page transition slide animation
+                let curr_trans = TRANSITION_PROGRESS.load(Ordering::SeqCst);
+                if curr_trans < 1000 {
+                    still_animating = true;
+                    let diff = (1000 - curr_trans as i32) / 3;
+                    let step = diff.max(25);
+                    let next = (curr_trans as i32 + step).min(1000) as u32;
+                    TRANSITION_PROGRESS.store(next, Ordering::SeqCst);
+                    if next == 1000 {
+                        let target = TARGET_PAGE.load(Ordering::SeqCst);
+                        CURRENT_PAGE.store(target, Ordering::SeqCst);
+                    }
+                }
+
+                // 2. Modern Tone Switch animation
                 let target_tone = if config.modern_tone { 1000 } else { 0 };
                 let curr_tone = MODERN_TONE_PROGRESS.load(Ordering::SeqCst);
                 if curr_tone != target_tone {
@@ -276,7 +292,7 @@ unsafe extern "system" fn settings_wnd_proc(
                     MODERN_TONE_PROGRESS.store(next, Ordering::SeqCst);
                 }
 
-                // 2. Auto Restore Switch animation
+                // 3. Auto Restore Switch animation
                 let target_restore = if config.auto_restore { 1000 } else { 0 };
                 let curr_restore = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst);
                 if curr_restore != target_restore {
@@ -287,7 +303,7 @@ unsafe extern "system" fn settings_wnd_proc(
                     AUTO_RESTORE_PROGRESS.store(next, Ordering::SeqCst);
                 }
 
-                // 3. Input Method Tab animation (Telex / VNI)
+                // 4. Input Method Tab animation (Telex / VNI)
                 let target_method = if config.input_method == InputMethod::Vni { 1000 } else { 0 };
                 let curr_method = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst);
                 if curr_method != target_method {
@@ -298,7 +314,7 @@ unsafe extern "system" fn settings_wnd_proc(
                     INPUT_METHOD_PROGRESS.store(next, Ordering::SeqCst);
                 }
 
-                // 4. Switch Key Tab animation (Ctrl+Shift / Alt+Z)
+                // 5. Switch Key Tab animation (Ctrl+Shift / Alt+Z)
                 let target_switch = if config.switch_key == SwitchKey::AltZ { 1000 } else { 0 };
                 let curr_switch = SWITCH_KEY_PROGRESS.load(Ordering::SeqCst);
                 if curr_switch != target_switch {
@@ -459,6 +475,11 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
         }
     }
 
+    // Nếu đang trong quá trình trượt animation thì bỏ qua click menu để tránh xung đột
+    if TRANSITION_PROGRESS.load(Ordering::SeqCst) < 1000 {
+        return;
+    }
+
     if page == 0 {
         // --- XỬ LÝ TRANG CHỦ ---
         // Click Card Trạng thái: bật/tắt tiếng Việt nhanh
@@ -470,40 +491,28 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             return;
         }
 
-        // Click Menu 1: Cài đặt đánh máy
+        // Click Menu 1: Cài đặt đánh máy -> Kích hoạt animation trượt sang trái
         if x >= card_x && x <= card_right && y >= 196 && y <= 270 {
-            CURRENT_PAGE.store(1, Ordering::SeqCst);
-            unsafe {
-                InvalidateRect(hwnd, null_mut(), 0);
-            }
+            start_page_transition(hwnd, 1, 1);
             return;
         }
 
-        // Click Menu 2: Cài đặt HoyuKey
+        // Click Menu 2: Cài đặt HoyuKey -> Kích hoạt animation trượt sang trái
         if x >= card_x && x <= card_right && y >= 282 && y <= 356 {
-            CURRENT_PAGE.store(2, Ordering::SeqCst);
-            unsafe {
-                InvalidateRect(hwnd, null_mut(), 0);
-            }
+            start_page_transition(hwnd, 2, 1);
             return;
         }
 
-        // Click Menu 3: Giới thiệu
+        // Click Menu 3: Giới thiệu -> Kích hoạt animation trượt sang trái
         if x >= card_x && x <= card_right && y >= 368 && y <= 442 {
-            CURRENT_PAGE.store(3, Ordering::SeqCst);
-            unsafe {
-                InvalidateRect(hwnd, null_mut(), 0);
-            }
+            start_page_transition(hwnd, 3, 1);
             return;
         }
     } else {
         // --- XỬ LÝ CÁC TRANG CON ---
-        // Click Nút Back tròn quay về Trang chủ:
+        // Click Nút Back tròn quay về Trang chủ -> Kích hoạt animation trượt sang phải
         if x >= card_x && x <= card_x + 40 && y >= 20 && y <= 60 {
-            CURRENT_PAGE.store(0, Ordering::SeqCst);
-            unsafe {
-                InvalidateRect(hwnd, null_mut(), 0);
-            }
+            start_page_transition(hwnd, 0, -1);
             return;
         }
 
@@ -570,6 +579,16 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
     }
 }
 
+fn start_page_transition(hwnd: HWND, target_page: u8, direction: i32) {
+    TARGET_PAGE.store(target_page, Ordering::SeqCst);
+    TRANSITION_DIR.store(direction, Ordering::SeqCst);
+    TRANSITION_PROGRESS.store(0, Ordering::SeqCst);
+    unsafe {
+        SetTimer(hwnd, TIMER_ID_ANIM, 16, None);
+        InvalidateRect(hwnd, null_mut(), 0);
+    }
+}
+
 unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h: i32, config: &Config) {
     let mut graphics: *mut GpGraphics = null_mut();
     GdipCreateFromHDC(dc, &mut graphics);
@@ -618,13 +637,179 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     let font_tab = create_gdip_font(family, 14.0, FontStyleBold);
     let font_btn = create_gdip_font(family, 14.0, FontStyleBold);
 
-    // Lưới căn chỉnh đối xứng hoàn hảo hai bên
     let (card_x, card_w, _card_right, right_ctrl, left_text, _) = get_layout_metrics(w);
 
     let current_page = CURRENT_PAGE.load(Ordering::SeqCst);
+    let target_page = TARGET_PAGE.load(Ordering::SeqCst);
+    let trans_raw = TRANSITION_PROGRESS.load(Ordering::SeqCst);
+    let trans_dir = TRANSITION_DIR.load(Ordering::SeqCst);
     let hover_id = HOVER_ITEM.load(Ordering::SeqCst);
 
-    if current_page == 0 {
+    // Tính toán độ trượt mượt mà (Cubic Ease-Out)
+    let progress = trans_raw as f32 / 1000.0;
+    let ease = 1.0 - (1.0 - progress).powi(3);
+
+    let slide_distance = (card_w + 48) as f32;
+
+    if trans_raw >= 1000 {
+        // Trạng thái tĩnh: Vẽ duy nhất 1 trang hiện tại
+        render_page_elements(
+            graphics,
+            current_page,
+            0.0,
+            card_x,
+            card_w,
+            right_ctrl,
+            left_text,
+            config,
+            hover_id,
+            font_title,
+            font_sub_title,
+            font_bold,
+            font_desc,
+            font_section,
+            font_tab,
+        );
+    } else {
+        // Trạng thái trượt animation 60 FPS:
+        if trans_dir == 1 {
+            // Vào subpage: Trang hiện tại trượt sang trái, trang đích trượt vào từ bên phải
+            let offset_curr = -slide_distance * ease;
+            let offset_target = slide_distance * (1.0 - ease);
+
+            render_page_elements(
+                graphics,
+                current_page,
+                offset_curr,
+                card_x,
+                card_w,
+                right_ctrl,
+                left_text,
+                config,
+                hover_id,
+                font_title,
+                font_sub_title,
+                font_bold,
+                font_desc,
+                font_section,
+                font_tab,
+            );
+
+            render_page_elements(
+                graphics,
+                target_page,
+                offset_target,
+                card_x,
+                card_w,
+                right_ctrl,
+                left_text,
+                config,
+                hover_id,
+                font_title,
+                font_sub_title,
+                font_bold,
+                font_desc,
+                font_section,
+                font_tab,
+            );
+        } else {
+            // Back về home: Trang hiện tại trượt sang phải, trang chủ trượt vào từ bên trái
+            let offset_curr = slide_distance * ease;
+            let offset_target = -slide_distance * (1.0 - ease);
+
+            render_page_elements(
+                graphics,
+                current_page,
+                offset_curr,
+                card_x,
+                card_w,
+                right_ctrl,
+                left_text,
+                config,
+                hover_id,
+                font_title,
+                font_sub_title,
+                font_bold,
+                font_desc,
+                font_section,
+                font_tab,
+            );
+
+            render_page_elements(
+                graphics,
+                target_page,
+                offset_target,
+                card_x,
+                card_w,
+                right_ctrl,
+                left_text,
+                config,
+                hover_id,
+                font_title,
+                font_sub_title,
+                font_bold,
+                font_desc,
+                font_section,
+                font_tab,
+            );
+        }
+    }
+
+    // ========================================================
+    // ⚓ CỐ ĐỊNH 2 NÚT Ở DƯỚI CÙNG (FIXED BOTTOM DOCK)
+    // Cố định vững chãi ở đáy, chia đều 50/50 không còn khoảng thừa!
+    // ========================================================
+    let btn_w = (card_w - 12) / 2;
+    let btn_y = 590;
+    let btn_h = 46;
+
+    // Nút Thoát (trái)
+    let exit_bg = if hover_id == 30 { ARGB_DANGER_HOVER } else { ARGB_CARD_BG };
+    gdiplus_draw_rounded_card(graphics, card_x, btn_y, btn_w, btn_h, 8, exit_bg, ARGB_DANGER_BORDER, 1.0);
+    draw_gdip_text_centered(graphics, font_btn, "Thoát HoyuKey", card_x, btn_y, btn_w, btn_h, ARGB_DANGER_TEXT);
+
+    // Nút Đóng (phải)
+    let btn_close_x = card_x + btn_w + 12;
+    let close_bg = if hover_id == 31 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
+    gdiplus_draw_rounded_card(graphics, btn_close_x, btn_y, btn_w, btn_h, 8, close_bg, ARGB_WHITE, 1.0);
+    draw_gdip_text_centered(graphics, font_btn, "Đóng", btn_close_x, btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
+
+    // Dọn dẹp tài nguyên GDI+
+    GdipDeleteFont(font_title);
+    GdipDeleteFont(font_sub_title);
+    GdipDeleteFont(font_bold);
+    GdipDeleteFont(font_desc);
+    GdipDeleteFont(font_section);
+    GdipDeleteFont(font_tab);
+    GdipDeleteFont(font_btn);
+    if !family.is_null() {
+        GdipDeleteFontFamily(family);
+    }
+    GdipDeleteGraphics(graphics);
+}
+
+unsafe fn render_page_elements(
+    graphics: *mut GpGraphics,
+    page: u8,
+    offset_x: f32,
+    base_card_x: i32,
+    card_w: i32,
+    base_right_ctrl: i32,
+    base_left_text: i32,
+    config: &Config,
+    hover_id: i32,
+    font_title: *mut GpFont,
+    font_sub_title: *mut GpFont,
+    font_bold: *mut GpFont,
+    font_desc: *mut GpFont,
+    font_section: *mut GpFont,
+    font_tab: *mut GpFont,
+) {
+    let card_x = (base_card_x as f32 + offset_x).round() as i32;
+    let right_ctrl = (base_right_ctrl as f32 + offset_x).round() as i32;
+    let left_text = (base_left_text as f32 + offset_x).round() as i32;
+
+    if page == 0 {
         // ========================================================
         // 🏠 TRANG CHỦ (HOME DASHBOARD)
         // ========================================================
@@ -634,7 +819,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
         draw_gdip_text(graphics, font_title, "HoyuKey Dashboard", card_x + 66, 17, ARGB_TEXT_PRIMARY, false);
         draw_gdip_text(graphics, font_desc, "Bộ gõ Tiếng Việt thế hệ mới cho PC", card_x + 66, 48, ARGB_TEXT_MUTED, false);
 
-        // 2. Card Trạng thái hệ thống (ở trên cùng theo đúng yêu cầu)
+        // 2. Card Trạng thái hệ thống (ở trên cùng theo chuẩn giao diện điện thoại)
         let status_bg = if hover_id == 10 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
         gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 76, 10, status_bg, ARGB_CARD_BORDER, 1.0);
 
@@ -661,50 +846,51 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
         // 4. Menu item 1: Cài đặt đánh máy (Typing Settings)
         let menu1_bg = if hover_id == 11 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
         gdiplus_draw_rounded_card(graphics, card_x, 196, card_w, 74, 10, menu1_bg, ARGB_CARD_BORDER, 1.0);
-        // Icon tròn
+        // Icon tròn vector bàn phím
         gdiplus_draw_rounded_card(graphics, left_text, 213, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_gdip_text_centered(graphics, font_bold, "⌨", left_text, 213, 40, 40, ARGB_WHITE);
+        draw_vector_keyboard_icon(graphics, left_text + 20, 233, ARGB_TEXT_PRIMARY);
 
         draw_gdip_text(graphics, font_bold, "Cài đặt đánh máy", left_text + 52, 211, ARGB_TEXT_PRIMARY, false);
         draw_gdip_text(graphics, font_desc, "Kiểu gõ Telex / VNI, bỏ dấu mới, khôi phục phím", left_text + 52, 235, ARGB_TEXT_MUTED, false);
-        // Mũi tên >
-        draw_gdip_text_centered(graphics, font_bold, ">", right_ctrl - 24, 211, 24, 44, ARGB_TEXT_MUTED);
+        // Icon vector chevron-right >
+        let arrow1_color = if hover_id == 11 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+        draw_vector_chevron_right(graphics, right_ctrl - 12, 233, arrow1_color);
 
         // 5. Menu item 2: Cài đặt HoyuKey (App Settings)
         let menu2_bg = if hover_id == 12 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
         gdiplus_draw_rounded_card(graphics, card_x, 282, card_w, 74, 10, menu2_bg, ARGB_CARD_BORDER, 1.0);
-        // Icon tròn
+        // Icon tròn vector Sliders (cài đặt tinh chỉnh)
         gdiplus_draw_rounded_card(graphics, left_text, 299, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_gdip_text_centered(graphics, font_bold, "⚙", left_text, 299, 40, 40, ARGB_WHITE);
+        draw_vector_sliders_icon(graphics, left_text + 20, 319, ARGB_TEXT_PRIMARY);
 
         draw_gdip_text(graphics, font_bold, "Cài đặt HoyuKey", left_text + 52, 297, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Phím tắt chuyển đổi, hệ thống khởi động", left_text + 52, 321, ARGB_TEXT_MUTED, false);
-        // Mũi tên >
-        draw_gdip_text_centered(graphics, font_bold, ">", right_ctrl - 24, 297, 24, 44, ARGB_TEXT_MUTED);
+        draw_gdip_text(graphics, font_desc, "Phím tắt chuyển đổi, tương thích trình duyệt", left_text + 52, 321, ARGB_TEXT_MUTED, false);
+        let arrow2_color = if hover_id == 12 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+        draw_vector_chevron_right(graphics, right_ctrl - 12, 319, arrow2_color);
 
         // 6. Menu item 3: Giới thiệu (About)
         let menu3_bg = if hover_id == 13 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
         gdiplus_draw_rounded_card(graphics, card_x, 368, card_w, 74, 10, menu3_bg, ARGB_CARD_BORDER, 1.0);
-        // Icon tròn
+        // Icon tròn vector Info
         gdiplus_draw_rounded_card(graphics, left_text, 385, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_gdip_text_centered(graphics, font_bold, "ℹ", left_text, 385, 40, 40, ARGB_WHITE);
+        draw_vector_info_icon(graphics, left_text + 20, 405, ARGB_TEXT_PRIMARY);
 
         draw_gdip_text(graphics, font_bold, "Giới thiệu", left_text + 52, 383, ARGB_TEXT_PRIMARY, false);
         draw_gdip_text(graphics, font_desc, "Phiên bản v0.1, tác giả Hoyuuna, mã nguồn mở", left_text + 52, 407, ARGB_TEXT_MUTED, false);
-        // Mũi tên >
-        draw_gdip_text_centered(graphics, font_bold, ">", right_ctrl - 24, 383, 24, 44, ARGB_TEXT_MUTED);
+        let arrow3_color = if hover_id == 13 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+        draw_vector_chevron_right(graphics, right_ctrl - 12, 405, arrow3_color);
 
     } else {
         // ========================================================
         // 📱 CÁC TRANG CON (SUBPAGES - Y NHƯ PHONE SETTINGS)
         // ========================================================
 
-        // Nút Back tròn 40x40 ở trên cùng bên trái
+        // Nút Back tròn 40x40 ở trên cùng bên trái với icon vector chevron-left mềm mại
         let back_bg = if hover_id == 20 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
         gdiplus_draw_rounded_card(graphics, card_x, 20, 40, 40, 20, back_bg, ARGB_CARD_BORDER, 1.0);
-        draw_gdip_text_centered(graphics, font_bold, "<", card_x, 20, 40, 40, ARGB_WHITE);
+        draw_vector_chevron_left(graphics, card_x + 20, 40, ARGB_TEXT_PRIMARY);
 
-        if current_page == 1 {
+        if page == 1 {
             // --- Trang Cài đặt đánh máy ---
             draw_gdip_text(graphics, font_sub_title, "Cài đặt đánh máy", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
 
@@ -745,7 +931,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
             let restore_progress = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, 288, restore_progress);
 
-        } else if current_page == 2 {
+        } else if page == 2 {
             // --- Trang Cài đặt HoyuKey ---
             draw_gdip_text(graphics, font_sub_title, "Cài đặt HoyuKey", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
 
@@ -772,7 +958,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
             draw_gdip_text(graphics, font_desc, "Tự động kích hoạt HoyuKey khi bật máy tính", left_text, 231, ARGB_TEXT_MUTED, false);
             draw_animated_switch(graphics, right_ctrl - 50, 212, 1.0);
 
-        } else if current_page == 3 {
+        } else if page == 3 {
             // --- Trang Giới thiệu ---
             draw_gdip_text(graphics, font_sub_title, "Giới thiệu", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
 
@@ -793,38 +979,140 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
             draw_gdip_text_centered(graphics, font_bold, "https://github.com/hoyuuna/HoyuKey", card_x, 368, card_w, 26, 0xFF60A5FA);
         }
     }
+}
 
-    // ========================================================
-    // ⚓ CỐ ĐỊNH 2 NÚT Ở DƯỚI CÙNG (FIXED BOTTOM DOCK)
-    // Kéo dài ra không còn khoảng thừa ở giữa!
-    // ========================================================
-    let btn_w = (card_w - 12) / 2; // Chia đều hai bên, khoảng cách giữa đúng 12px
-    let btn_y = 590;
-    let btn_h = 46;
+// ========================================================
+// 🎨 CÁC HÀM VẼ ICON VECTOR HIỆN ĐẠI (GDI+ PATH & PENS)
+// ========================================================
 
-    // Nút Thoát (trái): mép trái card_x, rộng btn_w
-    let exit_bg = if hover_id == 30 { ARGB_DANGER_HOVER } else { ARGB_CARD_BG };
-    gdiplus_draw_rounded_card(graphics, card_x, btn_y, btn_w, btn_h, 8, exit_bg, ARGB_DANGER_BORDER, 1.0);
-    draw_gdip_text_centered(graphics, font_btn, "Thoát HoyuKey", card_x, btn_y, btn_w, btn_h, ARGB_DANGER_TEXT);
+/// Vẽ icon vector Chevron Left (<) tinh xảo cho nút Back
+unsafe fn draw_vector_chevron_left(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
+    let mut path: *mut GpPath = null_mut();
+    GdipCreatePath(FillModeAlternate, &mut path);
 
-    // Nút Đóng (phải): mép phải card_right, rộng btn_w
-    let btn_close_x = card_x + btn_w + 12;
-    let close_bg = if hover_id == 31 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
-    gdiplus_draw_rounded_card(graphics, btn_close_x, btn_y, btn_w, btn_h, 8, close_bg, ARGB_WHITE, 1.0);
-    draw_gdip_text_centered(graphics, font_btn, "Đóng", btn_close_x, btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
+    let fx = cx as f32;
+    let fy = cy as f32;
+    GdipAddPathLine(path, fx + 2.5, fy - 6.5, fx - 3.5, fy);
+    GdipAddPathLine(path, fx - 3.5, fy, fx + 2.5, fy + 6.5);
 
-    // Dọn dẹp tài nguyên GDI+
-    GdipDeleteFont(font_title);
-    GdipDeleteFont(font_sub_title);
-    GdipDeleteFont(font_bold);
-    GdipDeleteFont(font_desc);
-    GdipDeleteFont(font_section);
-    GdipDeleteFont(font_tab);
-    GdipDeleteFont(font_btn);
-    if !family.is_null() {
-        GdipDeleteFontFamily(family);
-    }
-    GdipDeleteGraphics(graphics);
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, 2.2, UnitPixel, &mut pen);
+    GdipSetPenStartCap(pen, LineCapRound);
+    GdipSetPenEndCap(pen, LineCapRound);
+    GdipSetPenLineJoin(pen, LineJoinRound);
+
+    GdipDrawPath(graphics, pen, path);
+
+    GdipDeletePen(pen);
+    GdipDeletePath(path);
+}
+
+/// Vẽ icon vector Chevron Right (>) tinh xảo cho menu điều hướng
+unsafe fn draw_vector_chevron_right(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
+    let mut path: *mut GpPath = null_mut();
+    GdipCreatePath(FillModeAlternate, &mut path);
+
+    let fx = cx as f32;
+    let fy = cy as f32;
+    GdipAddPathLine(path, fx - 2.5, fy - 5.5, fx + 2.5, fy);
+    GdipAddPathLine(path, fx + 2.5, fy, fx - 2.5, fy + 5.5);
+
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, 2.0, UnitPixel, &mut pen);
+    GdipSetPenStartCap(pen, LineCapRound);
+    GdipSetPenEndCap(pen, LineCapRound);
+    GdipSetPenLineJoin(pen, LineJoinRound);
+
+    GdipDrawPath(graphics, pen, path);
+
+    GdipDeletePen(pen);
+    GdipDeletePath(path);
+}
+
+/// Vẽ icon vector Bàn phím hiện đại (Keyboard)
+unsafe fn draw_vector_keyboard_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
+    let fx = cx as f32;
+    let fy = cy as f32;
+
+    // Khung bàn phím bo góc
+    let path = create_rounded_path(fx - 11.0, fy - 8.0, 22.0, 16.0, 3.0);
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, 1.5, UnitPixel, &mut pen);
+    GdipDrawPath(graphics, pen, path);
+    GdipDeletePath(path);
+
+    // Hàng phím chấm nhỏ
+    let mut brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(color_argb, &mut brush);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx - 7.0, fy - 4.5, 2.0, 2.0);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx - 2.0, fy - 4.5, 2.0, 2.0);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx + 3.0, fy - 4.5, 2.0, 2.0);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx - 5.0, fy - 1.0, 2.0, 2.0);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx + 1.0, fy - 1.0, 2.0, 2.0);
+
+    // Phím Spacebar thanh ngang
+    let mut space_path: *mut GpPath = null_mut();
+    GdipCreatePath(FillModeAlternate, &mut space_path);
+    GdipAddPathLine(space_path, fx - 5.0, fy + 3.5, fx + 5.0, fy + 3.5);
+    GdipSetPenStartCap(pen, LineCapRound);
+    GdipSetPenEndCap(pen, LineCapRound);
+    GdipDrawPath(graphics, pen, space_path);
+    GdipDeletePath(space_path);
+
+    GdipDeleteBrush(brush as *mut GpBrush);
+    GdipDeletePen(pen);
+}
+
+/// Vẽ icon vector Sliders (Cài đặt tinh chỉnh hiện đại)
+unsafe fn draw_vector_sliders_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
+    let fx = cx as f32;
+    let fy = cy as f32;
+
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, 1.5, UnitPixel, &mut pen);
+    GdipSetPenStartCap(pen, LineCapRound);
+    GdipSetPenEndCap(pen, LineCapRound);
+
+    let mut brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(color_argb, &mut brush);
+
+    // Dòng 1: thanh ngang + núm gạt lệch trái
+    GdipDrawLine(graphics, pen, fx - 9.0, fy - 5.5, fx + 9.0, fy - 5.5);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx - 6.0, fy - 8.0, 5.0, 5.0);
+
+    // Dòng 2: thanh ngang + núm gạt lệch phải
+    GdipDrawLine(graphics, pen, fx - 9.0, fy, fx + 9.0, fy);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx + 1.0, fy - 2.5, 5.0, 5.0);
+
+    // Dòng 3: thanh ngang + núm gạt lệch trái
+    GdipDrawLine(graphics, pen, fx - 9.0, fy + 5.5, fx + 9.0, fy + 5.5);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx - 4.0, fy + 3.0, 5.0, 5.0);
+
+    GdipDeleteBrush(brush as *mut GpBrush);
+    GdipDeletePen(pen);
+}
+
+/// Vẽ icon vector Info (Chữ i trong vòng tròn)
+unsafe fn draw_vector_info_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
+    let fx = cx as f32;
+    let fy = cy as f32;
+
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, 1.5, UnitPixel, &mut pen);
+    GdipDrawEllipse(graphics, pen, fx - 9.0, fy - 9.0, 18.0, 18.0);
+
+    let mut brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(color_argb, &mut brush);
+    // Chấm chữ i
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx - 1.2, fy - 5.2, 2.4, 2.4);
+
+    // Thân chữ i
+    GdipSetPenStartCap(pen, LineCapRound);
+    GdipSetPenEndCap(pen, LineCapRound);
+    GdipDrawLine(graphics, pen, fx, fy - 1.5, fx, fy + 4.5);
+
+    GdipDeleteBrush(brush as *mut GpBrush);
+    GdipDeletePen(pen);
 }
 
 unsafe fn draw_animated_switch(
