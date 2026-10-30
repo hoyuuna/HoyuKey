@@ -707,6 +707,8 @@ mod tests {
         config.modern_tone = false;
         config.switch_key = SwitchKey::AltZ;
         config.auto_restore = false;
+        config.browser_compatibility = false;
+        config.browser_apps = "custom.exe, test.exe".to_string();
 
         let json = config.to_json_string();
         let mut loaded = Config::default();
@@ -716,6 +718,8 @@ mod tests {
         assert_eq!(loaded.modern_tone, false);
         assert_eq!(loaded.switch_key, SwitchKey::AltZ);
         assert_eq!(loaded.auto_restore, false);
+        assert_eq!(loaded.browser_compatibility, false);
+        assert_eq!(loaded.browser_apps, "custom.exe, test.exe");
     }
 
     #[test]

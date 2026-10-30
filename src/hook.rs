@@ -1,6 +1,9 @@
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD,
     KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK, VK_CONTROL, VK_DOWN, VK_END,
@@ -8,9 +11,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetForegroundWindow, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, SetWindowsHookExW,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::config::SwitchKey;
@@ -321,6 +324,52 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
     }
 }
 
+unsafe fn is_foreground_browser_app(apps_list: &str) -> bool {
+    let hwnd = GetForegroundWindow();
+    if hwnd.is_null() {
+        return false;
+    }
+
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if pid == 0 {
+        return false;
+    }
+
+    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if process.is_null() {
+        return false;
+    }
+
+    let mut path_buf = [0u16; 1024];
+    let mut size = path_buf.len() as u32;
+    let ok = QueryFullProcessImageNameW(
+        process,
+        0,
+        path_buf.as_mut_ptr(),
+        &mut size,
+    );
+    CloseHandle(process);
+
+    if ok != 0 && size > 0 {
+        let full_path = String::from_utf16_lossy(&path_buf[..size as usize]);
+        let exe_name = std::path::Path::new(&full_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        for app in apps_list.split(',') {
+            let app = app.trim().to_ascii_lowercase();
+            if !app.is_empty() && (exe_name == app || exe_name == format!("{}.exe", app)) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Gửi chuỗi Backspace và Unicode Text nguyên tử (Atomic SendInput).
 /// Gửi chuẩn Win32 API tương thích hoàn hảo với mọi ứng dụng, trình duyệt Chrome, Edge, Firefox, Word, Excel.
 unsafe fn send_transform_batch(backspaces: usize, text: &str) {
@@ -328,10 +377,22 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
         return;
     }
 
-    let mut inputs = Vec::with_capacity(backspaces * 2 + text.encode_utf16().count() * 2);
+    let is_browser = {
+        let state = GLOBAL_STATE.lock().unwrap();
+        if state.config.browser_compatibility && backspaces > 0 {
+            is_foreground_browser_app(&state.config.browser_apps)
+        } else {
+            false
+        }
+    };
+
+    // Khi ở trên trình duyệt (Chrome, Edge... Omnibox), nếu có selection autocomplete,
+    // ta gửi thêm 1 phím Backspace phụ ban đầu để nuốt trọn vùng chọn, tránh lỗi dđ / toó.
+    let total_backspaces = if is_browser { backspaces + 1 } else { backspaces };
+    let mut inputs = Vec::with_capacity(total_backspaces * 2 + text.encode_utf16().count() * 2);
 
     // 1. Gửi chính xác số lượng phím Backspace cần xóa
-    for _ in 0..backspaces {
+    for _ in 0..total_backspaces {
         let mut down: INPUT = std::mem::zeroed();
         down.r#type = INPUT_KEYBOARD;
         down.Anonymous.ki = KEYBDINPUT {

@@ -36,6 +36,10 @@ pub struct Config {
     pub auto_caps_sentence: bool,
     /// Tự động thêm dấu chấm câu khi xuống dòng hoặc gửi
     pub auto_period_enter: bool,
+    /// Tương thích trình duyệt (Chrome, Edge, Brave, Cốc Cốc...)
+    pub browser_compatibility: bool,
+    /// Danh sách tiến trình ứng dụng cần tương thích trình duyệt
+    pub browser_apps: String,
 }
 
 impl Default for Config {
@@ -53,6 +57,8 @@ impl Default for Config {
             auto_caps_line: false,
             auto_caps_sentence: false,
             auto_period_enter: false,
+            browser_compatibility: true,
+            browser_apps: "chrome.exe, msedge.exe, brave.exe, coccoc.exe, opera.exe".to_string(),
         }
     }
 }
@@ -89,7 +95,7 @@ impl Config {
 
     pub fn to_json_string(&self) -> String {
         format!(
-            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {}\n}}\n",
+            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\"\n}}\n",
             self.enabled,
             match self.input_method {
                 InputMethod::Telex => "Telex",
@@ -108,6 +114,8 @@ impl Config {
             self.auto_caps_line,
             self.auto_caps_sentence,
             self.auto_period_enter,
+            self.browser_compatibility,
+            self.browser_apps.replace('"', "\\\""),
         )
     }
 
@@ -141,6 +149,8 @@ impl Config {
                     "auto_caps_line" => self.auto_caps_line = val == "true",
                     "auto_caps_sentence" => self.auto_caps_sentence = val == "true",
                     "auto_period_enter" => self.auto_period_enter = val == "true",
+                    "browser_compatibility" => self.browser_compatibility = val == "true",
+                    "browser_apps" => self.browser_apps = val.to_string(),
                     _ => {}
                 }
             }
