@@ -1,5 +1,6 @@
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicI32, AtomicIsize, AtomicU32, AtomicU8, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     AddFontMemResourceEx, AddFontResourceExW, BeginPaint, BitBlt, CreateCompatibleBitmap,
@@ -138,6 +139,22 @@ pub fn init_ui_subsystems() {
 }
 
 pub fn shutdown_ui_subsystems() {
+    unsafe {
+        let mut lock = CACHED_FONTS.lock().unwrap();
+        if let Some(fonts) = lock.take() {
+            GdipDeleteFont(fonts.font_title);
+            GdipDeleteFont(fonts.font_sub_title);
+            GdipDeleteFont(fonts.font_modal_title);
+            GdipDeleteFont(fonts.font_bold);
+            GdipDeleteFont(fonts.font_desc);
+            GdipDeleteFont(fonts.font_section);
+            GdipDeleteFont(fonts.font_tab);
+            GdipDeleteFont(fonts.font_btn);
+            if !fonts.family.is_null() {
+                GdipDeleteFontFamily(fonts.family);
+            }
+        }
+    }
     let token = GDIP_TOKEN.swap(0, Ordering::SeqCst);
     if token != 0 {
         unsafe {
@@ -337,13 +354,17 @@ unsafe extern "system" fn settings_wnd_proc(
 
                 let mut still_animating = false;
 
-                // 1. Page transition slide animation
+                // 1. Page transition slide animation (nhanh, dứt khoát chỉ trong 5-6 frame)
                 let curr_trans = TRANSITION_PROGRESS.load(Ordering::SeqCst);
                 if curr_trans < 1000 {
                     still_animating = true;
-                    let diff = (1000 - curr_trans as i32) / 3;
-                    let step = diff.max(25);
-                    let next = (curr_trans as i32 + step).min(1000) as u32;
+                    let diff = 1000 - curr_trans as i32;
+                    let next = if diff <= 40 {
+                        1000
+                    } else {
+                        let step = (diff / 2).max(140);
+                        (curr_trans as i32 + step).min(1000) as u32
+                    };
                     TRANSITION_PROGRESS.store(next, Ordering::SeqCst);
                     if next == 1000 {
                         let target = TARGET_PAGE.load(Ordering::SeqCst);
@@ -351,146 +372,49 @@ unsafe extern "system" fn settings_wnd_proc(
                     }
                 }
 
-                // 1b. Mode Progress animation (0 = E, 1000 = V)
-                let target_mode = if config.enabled { 1000 } else { 0 };
-                let curr_mode = MODE_PROGRESS.load(Ordering::SeqCst);
-                if curr_mode != target_mode {
-                    still_animating = true;
-                    let diff = (target_mode as i32 - curr_mode as i32) / 3;
-                    let step = if diff == 0 { if target_mode > curr_mode { 1 } else { -1 } } else { diff };
-                    let next = (curr_mode as i32 + step).clamp(0, 1000) as u32;
-                    MODE_PROGRESS.store(next, Ordering::SeqCst);
-                }
+                // 2. Helper cập nhật mượt mà, dứt khoát cho tất cả các switch
+                let mut advance_anim = |target: u32, current_atom: &AtomicU32| {
+                    let curr = current_atom.load(Ordering::SeqCst);
+                    if curr != target {
+                        still_animating = true;
+                        let diff = target as i32 - curr as i32;
+                        let next = if diff.abs() <= 35 {
+                            target
+                        } else {
+                            let step = (diff / 2).clamp(-250, 250);
+                            let step = if step.abs() < 60 { if diff > 0 { 60 } else { -60 } } else { step };
+                            (curr as i32 + step).clamp(0, 1000) as u32
+                        };
+                        current_atom.store(next, Ordering::SeqCst);
+                    }
+                };
 
-                // 2. Modern Tone Switch animation
-                let target_tone = if config.modern_tone { 1000 } else { 0 };
-                let curr_tone = MODERN_TONE_PROGRESS.load(Ordering::SeqCst);
-                if curr_tone != target_tone {
-                    still_animating = true;
-                    let diff = (target_tone as i32 - curr_tone as i32) / 3;
-                    let step = if diff == 0 { if target_tone > curr_tone { 1 } else { -1 } } else { diff };
-                    let next = (curr_tone as i32 + step).clamp(0, 1000) as u32;
-                    MODERN_TONE_PROGRESS.store(next, Ordering::SeqCst);
-                }
+                advance_anim(if config.enabled { 1000 } else { 0 }, &MODE_PROGRESS);
+                advance_anim(if config.modern_tone { 1000 } else { 0 }, &MODERN_TONE_PROGRESS);
+                advance_anim(if config.free_marking { 1000 } else { 0 }, &FREE_MARKING_PROGRESS);
+                advance_anim(if config.smart_english { 1000 } else { 0 }, &SMART_ENGLISH_PROGRESS);
+                advance_anim(if config.modify_tone_in_word { 1000 } else { 0 }, &MODIFY_TONE_PROGRESS);
+                advance_anim(if config.auto_restore { 1000 } else { 0 }, &AUTO_RESTORE_PROGRESS);
+                advance_anim(if config.input_method == InputMethod::Vni { 1000 } else { 0 }, &INPUT_METHOD_PROGRESS);
+                advance_anim(if config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, &SWITCH_KEY_PROGRESS);
+                advance_anim(if config.start_with_windows { 1000 } else { 0 }, &START_WITH_WINDOWS_PROGRESS);
+                advance_anim(if config.auto_caps_line { 1000 } else { 0 }, &AUTO_CAPS_LINE_PROGRESS);
+                advance_anim(if config.auto_caps_sentence { 1000 } else { 0 }, &AUTO_CAPS_SENTENCE_PROGRESS);
+                advance_anim(if config.auto_period_enter { 1000 } else { 0 }, &AUTO_PERIOD_ENTER_PROGRESS);
 
-                // 2b. Free Marking Switch animation
-                let target_free = if config.free_marking { 1000 } else { 0 };
-                let curr_free = FREE_MARKING_PROGRESS.load(Ordering::SeqCst);
-                if curr_free != target_free {
-                    still_animating = true;
-                    let diff = (target_free as i32 - curr_free as i32) / 3;
-                    let step = if diff == 0 { if target_free > curr_free { 1 } else { -1 } } else { diff };
-                    let next = (curr_free as i32 + step).clamp(0, 1000) as u32;
-                    FREE_MARKING_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 2c. Smart English Switch animation
-                let target_smart = if config.smart_english { 1000 } else { 0 };
-                let curr_smart = SMART_ENGLISH_PROGRESS.load(Ordering::SeqCst);
-                if curr_smart != target_smart {
-                    still_animating = true;
-                    let diff = (target_smart as i32 - curr_smart as i32) / 3;
-                    let step = if diff == 0 { if target_smart > curr_smart { 1 } else { -1 } } else { diff };
-                    let next = (curr_smart as i32 + step).clamp(0, 1000) as u32;
-                    SMART_ENGLISH_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 2d. Modify Tone in Word Switch animation
-                let target_modify = if config.modify_tone_in_word { 1000 } else { 0 };
-                let curr_modify = MODIFY_TONE_PROGRESS.load(Ordering::SeqCst);
-                if curr_modify != target_modify {
-                    still_animating = true;
-                    let diff = (target_modify as i32 - curr_modify as i32) / 3;
-                    let step = if diff == 0 { if target_modify > curr_modify { 1 } else { -1 } } else { diff };
-                    let next = (curr_modify as i32 + step).clamp(0, 1000) as u32;
-                    MODIFY_TONE_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 3. Auto Restore Switch animation
-                let target_restore = if config.auto_restore { 1000 } else { 0 };
-                let curr_restore = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst);
-                if curr_restore != target_restore {
-                    still_animating = true;
-                    let diff = (target_restore as i32 - curr_restore as i32) / 3;
-                    let step = if diff == 0 { if target_restore > curr_restore { 1 } else { -1 } } else { diff };
-                    let next = (curr_restore as i32 + step).clamp(0, 1000) as u32;
-                    AUTO_RESTORE_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 4. Input Method Tab animation (Telex / VNI)
-                let target_method = if config.input_method == InputMethod::Vni { 1000 } else { 0 };
-                let curr_method = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst);
-                if curr_method != target_method {
-                    still_animating = true;
-                    let diff = (target_method as i32 - curr_method as i32) / 3;
-                    let step = if diff == 0 { if target_method > curr_method { 1 } else { -1 } } else { diff };
-                    let next = (curr_method as i32 + step).clamp(0, 1000) as u32;
-                    INPUT_METHOD_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 5. Switch Key Tab animation (Ctrl+Shift / Alt+Z)
-                let target_switch = if config.switch_key == SwitchKey::AltZ { 1000 } else { 0 };
-                let curr_switch = SWITCH_KEY_PROGRESS.load(Ordering::SeqCst);
-                if curr_switch != target_switch {
-                    still_animating = true;
-                    let diff = (target_switch as i32 - curr_switch as i32) / 3;
-                    let step = if diff == 0 { if target_switch > curr_switch { 1 } else { -1 } } else { diff };
-                    let next = (curr_switch as i32 + step).clamp(0, 1000) as u32;
-                    SWITCH_KEY_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 5b. Start with Windows Switch animation
-                let target_autostart = if config.start_with_windows { 1000 } else { 0 };
-                let curr_autostart = START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst);
-                if curr_autostart != target_autostart {
-                    still_animating = true;
-                    let diff = (target_autostart as i32 - curr_autostart as i32) / 3;
-                    let step = if diff == 0 { if target_autostart > curr_autostart { 1 } else { -1 } } else { diff };
-                    let next = (curr_autostart as i32 + step).clamp(0, 1000) as u32;
-                    START_WITH_WINDOWS_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 5c. Auto Caps Line Switch animation
-                let target_caps_line = if config.auto_caps_line { 1000 } else { 0 };
-                let curr_caps_line = AUTO_CAPS_LINE_PROGRESS.load(Ordering::SeqCst);
-                if curr_caps_line != target_caps_line {
-                    still_animating = true;
-                    let diff = (target_caps_line as i32 - curr_caps_line as i32) / 3;
-                    let step = if diff == 0 { if target_caps_line > curr_caps_line { 1 } else { -1 } } else { diff };
-                    let next = (curr_caps_line as i32 + step).clamp(0, 1000) as u32;
-                    AUTO_CAPS_LINE_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 5d. Auto Caps Sentence Switch animation
-                let target_caps_sent = if config.auto_caps_sentence { 1000 } else { 0 };
-                let curr_caps_sent = AUTO_CAPS_SENTENCE_PROGRESS.load(Ordering::SeqCst);
-                if curr_caps_sent != target_caps_sent {
-                    still_animating = true;
-                    let diff = (target_caps_sent as i32 - curr_caps_sent as i32) / 3;
-                    let step = if diff == 0 { if target_caps_sent > curr_caps_sent { 1 } else { -1 } } else { diff };
-                    let next = (curr_caps_sent as i32 + step).clamp(0, 1000) as u32;
-                    AUTO_CAPS_SENTENCE_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 5e. Auto Period Enter Switch animation
-                let target_period = if config.auto_period_enter { 1000 } else { 0 };
-                let curr_period = AUTO_PERIOD_ENTER_PROGRESS.load(Ordering::SeqCst);
-                if curr_period != target_period {
-                    still_animating = true;
-                    let diff = (target_period as i32 - curr_period as i32) / 3;
-                    let step = if diff == 0 { if target_period > curr_period { 1 } else { -1 } } else { diff };
-                    let next = (curr_period as i32 + step).clamp(0, 1000) as u32;
-                    AUTO_PERIOD_ENTER_PROGRESS.store(next, Ordering::SeqCst);
-                }
-
-                // 6. Modal Popup Pop-out Animation
+                // 3. Modal Popup Pop-out Animation
                 let modal_state = crate::updater::MODAL_STATE.load(Ordering::SeqCst);
                 if modal_state > 0 {
                     let curr_modal_anim = MODAL_ANIM_PROGRESS.load(Ordering::SeqCst);
                     if curr_modal_anim < 1000 {
                         still_animating = true;
-                        let step = ((1000 - curr_modal_anim) / 3).max(30);
-                        let next = (curr_modal_anim + step).min(1000);
+                        let diff = 1000 - curr_modal_anim;
+                        let next = if diff <= 40 {
+                            1000
+                        } else {
+                            let step = (diff / 2).max(80);
+                            (curr_modal_anim + step).min(1000)
+                        };
                         MODAL_ANIM_PROGRESS.store(next, Ordering::SeqCst);
                     }
                 }
@@ -892,6 +816,58 @@ fn start_page_transition(hwnd: HWND, target_page: u8, direction: i32) {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CachedFonts {
+    family: *mut GpFontFamily,
+    font_title: *mut GpFont,
+    font_sub_title: *mut GpFont,
+    font_modal_title: *mut GpFont,
+    font_bold: *mut GpFont,
+    font_desc: *mut GpFont,
+    font_section: *mut GpFont,
+    font_tab: *mut GpFont,
+    font_btn: *mut GpFont,
+}
+
+unsafe impl Send for CachedFonts {}
+unsafe impl Sync for CachedFonts {}
+
+static CACHED_FONTS: Mutex<Option<CachedFonts>> = Mutex::new(None);
+
+unsafe fn get_cached_fonts() -> CachedFonts {
+    let mut lock = CACHED_FONTS.lock().unwrap();
+    if let Some(fonts) = *lock {
+        return fonts;
+    }
+
+    let mut family: *mut GpFontFamily = null_mut();
+    let family_name = to_wide("Google Sans");
+    GdipCreateFontFamilyFromName(family_name.as_ptr(), null_mut(), &mut family);
+    if family.is_null() {
+        let fallback = to_wide("Segoe UI Variable Text");
+        GdipCreateFontFamilyFromName(fallback.as_ptr(), null_mut(), &mut family);
+    }
+    if family.is_null() {
+        let fallback2 = to_wide("Segoe UI");
+        GdipCreateFontFamilyFromName(fallback2.as_ptr(), null_mut(), &mut family);
+    }
+
+    let fonts = CachedFonts {
+        family,
+        font_title: create_gdip_font(family, 24.0, FontStyleBold),
+        font_sub_title: create_gdip_font(family, 21.0, FontStyleBold),
+        font_modal_title: create_gdip_font(family, 18.0, FontStyleBold),
+        font_bold: create_gdip_font(family, 15.0, FontStyleBold),
+        font_desc: create_gdip_font(family, 12.0, FontStyleRegular),
+        font_section: create_gdip_font(family, 11.0, FontStyleBold),
+        font_tab: create_gdip_font(family, 12.0, FontStyleBold),
+        font_btn: create_gdip_font(family, 14.0, FontStyleBold),
+    };
+
+    *lock = Some(fonts);
+    fonts
+}
+
 unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h: i32, config: &Config) {
     let mut graphics: *mut GpGraphics = null_mut();
     GdipCreateFromHDC(dc, &mut graphics);
@@ -900,8 +876,6 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     }
 
     GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
-    GdipSetInterpolationMode(graphics, InterpolationModeHighQualityBicubic);
-    GdipSetPixelOffsetMode(graphics, PixelOffsetModeHighQuality);
     GdipSetTextRenderingHint(graphics, TextRenderingHintClearTypeGridFit);
 
     // Tô nền Zinc #09090b
@@ -917,26 +891,15 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     GdipDeletePath(bg_path);
     GdipDeleteBrush(bg_brush as *mut GpBrush);
 
-    let mut family: *mut GpFontFamily = null_mut();
-    let family_name = to_wide("Google Sans");
-    GdipCreateFontFamilyFromName(family_name.as_ptr(), null_mut(), &mut family);
-    if family.is_null() {
-        let fallback = to_wide("Segoe UI Variable Text");
-        GdipCreateFontFamilyFromName(fallback.as_ptr(), null_mut(), &mut family);
-    }
-    if family.is_null() {
-        let fallback2 = to_wide("Segoe UI");
-        GdipCreateFontFamilyFromName(fallback2.as_ptr(), null_mut(), &mut family);
-    }
-
-    let font_title = create_gdip_font(family, 24.0, FontStyleBold);
-    let font_sub_title = create_gdip_font(family, 21.0, FontStyleBold);
-    let font_modal_title = create_gdip_font(family, 18.0, FontStyleBold);
-    let font_bold = create_gdip_font(family, 15.0, FontStyleBold);
-    let font_desc = create_gdip_font(family, 12.0, FontStyleRegular);
-    let font_section = create_gdip_font(family, 11.0, FontStyleBold);
-    let font_tab = create_gdip_font(family, 12.0, FontStyleBold);
-    let font_btn = create_gdip_font(family, 14.0, FontStyleBold);
+    let fonts = get_cached_fonts();
+    let font_title = fonts.font_title;
+    let font_sub_title = fonts.font_sub_title;
+    let font_modal_title = fonts.font_modal_title;
+    let font_bold = fonts.font_bold;
+    let font_desc = fonts.font_desc;
+    let font_section = fonts.font_section;
+    let font_tab = fonts.font_tab;
+    let font_btn = fonts.font_btn;
 
     let (card_x, card_w, _card_right, right_ctrl, left_text, _) = get_layout_metrics(w);
 
@@ -1181,17 +1144,6 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
         }
     }
 
-    GdipDeleteFont(font_title);
-    GdipDeleteFont(font_sub_title);
-    GdipDeleteFont(font_modal_title);
-    GdipDeleteFont(font_bold);
-    GdipDeleteFont(font_desc);
-    GdipDeleteFont(font_section);
-    GdipDeleteFont(font_tab);
-    GdipDeleteFont(font_btn);
-    if !family.is_null() {
-        GdipDeleteFontFamily(family);
-    }
     GdipDeleteGraphics(graphics);
 }
 

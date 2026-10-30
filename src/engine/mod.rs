@@ -285,7 +285,7 @@ impl Engine {
         if config.auto_restore && self.has_transformed {
             let mut test_word = self.current_word.clone();
             test_word.push(c);
-            if !is_valid_vietnamese_syllable(&test_word) {
+            if !is_valid_vietnamese_syllable(&test_word) && !is_valid_abbreviation(&test_word) {
                 let backspaces = self.current_word.chars().count();
                 let text = self.raw_keys.clone();
                 self.reset();
@@ -309,6 +309,27 @@ impl Engine {
         self.current_word.push(c);
         KeyAction::PassThrough
     }
+}
+
+/// Kiểm tra từ có phải là từ viết tắt tiếng Việt hợp lệ hay không (ví dụ: đt, đc, đk, đh, đb, đr, đx, đng...)
+/// Trong tiếng Việt, người dùng rất hay viết tắt bằng các chữ cái phụ âm có chữ 'đ'.
+/// Những từ này không có nguyên âm và gồm toàn các phụ âm tiếng Việt, do đó auto_restore tuyệt đối không được đá về "dd...".
+pub fn is_valid_abbreviation(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.is_empty() {
+        return false;
+    }
+    // Không chứa nguyên âm
+    if !telex::extract_vowel_indices(&chars).is_empty() {
+        return false;
+    }
+    // Phải có chữ 'đ' hoặc 'Đ'
+    let has_d = chars.iter().any(|&c| c == 'đ' || c == 'Đ');
+    if !has_d {
+        return false;
+    }
+    // Mọi ký tự trong từ đều phải là phụ âm tiếng Việt hợp lệ
+    chars.iter().all(|&c| c == 'đ' || c == 'Đ' || vietnamese::is_consonant(c))
 }
 
 /// Kiểm tra một từ có phải là âm tiết tiếng Việt hợp lệ theo cấu trúc ngữ âm học hay không.
@@ -907,5 +928,41 @@ mod tests {
             }
         );
         assert_eq!(engine.current_word, "aa");
+    }
+
+    #[test]
+    fn test_telex_abbreviation() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // 1. Viết tắt "đt" (điện thoại) không bị đá về "ddt"
+        engine.process_char('d', &config);
+        let a_d2 = engine.process_char('d', &config);
+        assert_eq!(
+            a_d2,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "đ".to_string(),
+            }
+        );
+        let a_t = engine.process_char('t', &config);
+        assert_eq!(a_t, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "đt");
+
+        // 2. Viết tắt "đc" (được) không bị đá về "ddc"
+        engine.reset();
+        engine.process_char('d', &config);
+        engine.process_char('d', &config);
+        let a_c = engine.process_char('c', &config);
+        assert_eq!(a_c, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "đc");
+
+        // 3. Viết tắt "đk" (đăng ký) không bị đá về "ddk"
+        engine.reset();
+        engine.process_char('d', &config);
+        engine.process_char('d', &config);
+        let a_k = engine.process_char('k', &config);
+        assert_eq!(a_k, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "đk");
     }
 }
