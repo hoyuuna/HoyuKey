@@ -789,6 +789,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
         }
 
         if changed {
+            state.config.save();
             let main_hwnd = state.main_hwnd;
             drop(state);
             unsafe {

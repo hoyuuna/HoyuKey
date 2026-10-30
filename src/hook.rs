@@ -242,6 +242,7 @@ pub fn toggle_vietnamese_mode() {
     let (hwnd, enabled) = {
         let mut state = GLOBAL_STATE.lock().unwrap();
         state.config.enabled = !state.config.enabled;
+        state.config.save();
         state.engine.reset();
         (state.main_hwnd, state.config.enabled)
     };

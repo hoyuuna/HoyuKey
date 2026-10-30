@@ -33,8 +33,7 @@ pub struct AppState {
 }
 
 pub static GLOBAL_STATE: LazyLock<Mutex<AppState>> = LazyLock::new(|| {
-    let mut config = Config::default();
-    config.start_with_windows = autostart::is_autostart_enabled();
+    let config = Config::load();
     Mutex::new(AppState {
         config,
         engine: Engine::new(),
@@ -213,6 +212,7 @@ fn handle_tray_command(cmd_id: usize) {
     match cmd_id {
         IDM_TOGGLE_MODE => {
             state.config.enabled = !state.config.enabled;
+            state.config.save();
             state.engine.reset();
             let config = state.config.clone();
             drop(state);
@@ -223,15 +223,19 @@ fn handle_tray_command(cmd_id: usize) {
         }
         IDM_TELEX => {
             state.config.input_method = InputMethod::Telex;
+            state.config.save();
         }
         IDM_VNI => {
             state.config.input_method = InputMethod::Vni;
+            state.config.save();
         }
         IDM_MODERN_TONE => {
             state.config.modern_tone = !state.config.modern_tone;
+            state.config.save();
         }
         IDM_AUTO_RESTORE => {
             state.config.auto_restore = !state.config.auto_restore;
+            state.config.save();
         }
         IDM_CONTROL_PANEL => {
             drop(state);

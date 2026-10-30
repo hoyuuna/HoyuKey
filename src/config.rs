@@ -47,3 +47,88 @@ impl Default for Config {
         }
     }
 }
+
+impl Config {
+    pub fn config_path() -> Option<std::path::PathBuf> {
+        let appdata = std::env::var("APPDATA").ok()?;
+        let dir = std::path::PathBuf::from(appdata).join("HoyuKey");
+        if !dir.exists() {
+            let _ = std::fs::create_dir_all(&dir);
+        }
+        Some(dir.join("config.json"))
+    }
+
+    pub fn load() -> Self {
+        let mut config = Self::default();
+        if let Some(path) = Self::config_path() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                config.merge_from_json(&content);
+            } else {
+                config.save();
+            }
+        }
+        config.start_with_windows = crate::autostart::is_autostart_enabled();
+        config
+    }
+
+    pub fn save(&self) {
+        if let Some(path) = Self::config_path() {
+            let json = self.to_json_string();
+            let _ = std::fs::write(path, json);
+        }
+    }
+
+    pub fn to_json_string(&self) -> String {
+        format!(
+            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {}\n}}\n",
+            self.enabled,
+            match self.input_method {
+                InputMethod::Telex => "Telex",
+                InputMethod::Vni => "VNI",
+            },
+            self.modern_tone,
+            match self.switch_key {
+                SwitchKey::CtrlShift => "CtrlShift",
+                SwitchKey::AltZ => "AltZ",
+            },
+            self.auto_restore,
+            self.free_marking,
+            self.smart_english,
+            self.modify_tone_in_word,
+            self.start_with_windows,
+        )
+    }
+
+    pub fn merge_from_json(&mut self, json: &str) {
+        for line in json.lines() {
+            let line = line.trim().trim_end_matches(',');
+            if let Some((key, val)) = line.split_once(':') {
+                let key = key.trim().trim_matches('"');
+                let val = val.trim().trim_matches('"');
+                match key {
+                    "enabled" => self.enabled = val == "true",
+                    "input_method" => {
+                        if val.eq_ignore_ascii_case("vni") {
+                            self.input_method = InputMethod::Vni;
+                        } else {
+                            self.input_method = InputMethod::Telex;
+                        }
+                    }
+                    "modern_tone" => self.modern_tone = val == "true",
+                    "switch_key" => {
+                        if val.eq_ignore_ascii_case("altz") {
+                            self.switch_key = SwitchKey::AltZ;
+                        } else {
+                            self.switch_key = SwitchKey::CtrlShift;
+                        }
+                    }
+                    "auto_restore" => self.auto_restore = val == "true",
+                    "free_marking" => self.free_marking = val == "true",
+                    "smart_english" => self.smart_english = val == "true",
+                    "modify_tone_in_word" => self.modify_tone_in_word = val == "true",
+                    _ => {}
+                }
+            }
+        }
+    }
+}
