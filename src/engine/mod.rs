@@ -430,24 +430,29 @@ mod tests {
     #[test]
     fn test_telex_toggle_modify_tone_in_word() {
         let mut engine = Engine::new();
-        let config_default = Config::default();
+        // Mặc định bật: "hòa" (chuẩn cũ dấu trên o) + "n" -> "hoàn" (tự động dời dấu sang a)
+        let mut config_on = Config::default();
+        config_on.modern_tone = false;
+        config_on.modify_tone_in_word = true;
 
-        // Mặc định bật: "khí" + "a" -> "khái"
-        for ch in "khis".chars() {
-            engine.process_char(ch, &config_default);
+        for ch in "hoaf".chars() {
+            engine.process_char(ch, &config_on);
         }
-        engine.process_char('a', &config_default);
-        assert_eq!(engine.current_word, "khái");
+        assert_eq!(engine.current_word, "hòa");
+        engine.process_char('n', &config_on);
+        assert_eq!(engine.current_word, "hoàn");
 
-        // Khi tắt: "khí" + "a" -> "khía" (không tái cân bằng dấu)
+        // Khi tắt modify_tone_in_word: "hòa" + "n" -> "hòan" (dấu bị kẹt lại ở chữ o)
         let mut engine_off = Engine::new();
         let mut config_off = Config::default();
+        config_off.modern_tone = false;
         config_off.modify_tone_in_word = false;
 
-        for ch in "khis".chars() {
+        for ch in "hoaf".chars() {
             engine_off.process_char(ch, &config_off);
         }
-        engine_off.process_char('a', &config_off);
-        assert_eq!(engine_off.current_word, "khía");
+        assert_eq!(engine_off.current_word, "hòa");
+        engine_off.process_char('n', &config_off);
+        assert_eq!(engine_off.current_word, "hòan");
     }
 }
