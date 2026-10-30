@@ -197,18 +197,29 @@ impl Engine {
 
         if let Some(new_word) = transformed {
             let backspaces = self.current_word.chars().count();
-            self.current_word = new_word.clone();
-            self.has_transformed = true;
+            let old_accents = vietnamese::count_vietnamese_accents(&self.current_word);
+            let new_accents = vietnamese::count_vietnamese_accents(&new_word);
+            let is_undo = new_accents < old_accents;
 
-            // Nếu auto_restore bật và từ mới tạo ra là âm tiết không hợp lệ trong tiếng Việt:
-            if config.auto_restore && !is_valid_vietnamese_syllable(&self.current_word) {
-                let bs = self.current_word.chars().count();
-                let text = self.raw_keys.clone();
-                self.reset();
-                return KeyAction::Transform {
-                    backspaces: bs,
-                    text,
-                };
+            self.current_word = new_word.clone();
+
+            if is_undo {
+                // Người dùng chủ động gõ phím để hoàn tác (ví dụ ww -> w, ddd -> dd, aaa -> aa)
+                self.raw_keys = new_word.clone();
+                self.has_transformed = new_accents > 0;
+            } else {
+                self.has_transformed = true;
+
+                // Nếu auto_restore bật và từ mới tạo ra là âm tiết không hợp lệ trong tiếng Việt:
+                if config.auto_restore && !is_valid_vietnamese_syllable(&self.current_word) {
+                    let bs = self.current_word.chars().count();
+                    let text = self.raw_keys.clone();
+                    self.reset();
+                    return KeyAction::Transform {
+                        backspaces: bs,
+                        text,
+                    };
+                }
             }
 
             return KeyAction::Transform {
@@ -771,5 +782,111 @@ mod tests {
         assert_eq!(loaded.modern_tone, false);
         assert_eq!(loaded.switch_key, SwitchKey::AltZ);
         assert_eq!(loaded.auto_restore, false);
+    }
+
+    #[test]
+    fn test_telex_ww() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // 1. Gõ 'w' lần 1 -> "ư"
+        let a1 = engine.process_char('w', &config);
+        assert_eq!(
+            a1,
+            KeyAction::Transform {
+                backspaces: 0,
+                text: "ư".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "ư");
+
+        // 2. Gõ 'w' lần 2 -> hoàn tác thành "w" (chứ không phải "ww")
+        let a2 = engine.process_char('w', &config);
+        assert_eq!(
+            a2,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "w".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "w");
+
+        // 3. Gõ 'w' lần 3 -> "wư"
+        let a3 = engine.process_char('w', &config);
+        assert_eq!(
+            a3,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "wư".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "wư");
+
+        // 4. Gõ 'w' lần 4 -> hoàn tác thành "ww"
+        let a4 = engine.process_char('w', &config);
+        assert_eq!(
+            a4,
+            KeyAction::Transform {
+                backspaces: 2,
+                text: "ww".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "ww");
+    }
+
+    #[test]
+    fn test_telex_undo_dd() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        let a1 = engine.process_char('d', &config);
+        assert_eq!(a1, KeyAction::PassThrough);
+
+        let a2 = engine.process_char('d', &config);
+        assert_eq!(
+            a2,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "đ".to_string(),
+            }
+        );
+
+        let a3 = engine.process_char('d', &config);
+        assert_eq!(
+            a3,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "dd".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "dd");
+    }
+
+    #[test]
+    fn test_telex_undo_aa() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        let a1 = engine.process_char('a', &config);
+        assert_eq!(a1, KeyAction::PassThrough);
+
+        let a2 = engine.process_char('a', &config);
+        assert_eq!(
+            a2,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "â".to_string(),
+            }
+        );
+
+        let a3 = engine.process_char('a', &config);
+        assert_eq!(
+            a3,
+            KeyAction::Transform {
+                backspaces: 1,
+                text: "aa".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "aa");
     }
 }

@@ -235,3 +235,22 @@ pub fn is_consonant(c: char) -> bool {
         'b' | 'c' | 'd' | 'đ' | 'g' | 'h' | 'k' | 'l' | 'm' | 'n' | 'p' | 'q' | 'r' | 's' | 't' | 'v' | 'x'
     )
 }
+
+/// Đếm tổng số dấu tiếng Việt (mũ, móc, trăng, thanh, chữ đ/Đ) có trong từ
+pub fn count_vietnamese_accents(word: &str) -> usize {
+    let mut count = 0;
+    for c in word.chars() {
+        if c == 'đ' || c == 'Đ' {
+            count += 1;
+        } else if let Some((_, vmod, tone, _)) = decompose_vietnamese_char(c) {
+            if vmod != VowelMod::None {
+                count += 1;
+            }
+            if tone != Tone::None {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
