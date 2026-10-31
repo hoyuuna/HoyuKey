@@ -558,7 +558,7 @@ mod tests {
                 text: "task".to_string(),
             }
         );
-        assert_eq!(engine.current_word, "");
+        assert_eq!(engine.current_word, "task");
     }
 
     #[test]
