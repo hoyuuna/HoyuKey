@@ -20,9 +20,9 @@ jobs:
       - name: Set dynamic version in Cargo.toml
         shell: powershell
         run: |
-          $ver = "0.1.${{ github.run_number }}"
+          $ver = "1.0.${{ github.run_number }}"
           Write-Host "Setting version to $ver in Cargo.toml..."
-          (Get-Content Cargo.toml) -replace 'version = "0.1.0"', "version = `"$ver`"" | Set-Content Cargo.toml
+          (Get-Content Cargo.toml) -replace 'version = "1.0.0"', "version = `"$ver`"" | Set-Content Cargo.toml
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -52,7 +52,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HoyuKey-v0.1.${{ github.run_number }}-Windows-x64
+          name: HoyuKey-v1.0.${{ github.run_number }}-Windows-x64
           path: dist/HoyuKey.exe
           retention-days: 30
 
@@ -60,19 +60,18 @@ jobs:
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.${{ github.run_number }}
-          name: "HoyuKey v0.1.${{ github.run_number }} (Pre-release)"
+          tag_name: v1.0.${{ github.run_number }}
+          name: "HoyuKey v1.0.${{ github.run_number }}"
           body: |
-            ### ⌨️ HoyuKey Pre-release v0.1.${{ github.run_number }}
-            
-            Phiên bản pre-release được build tự động qua GitHub Actions từ branch `${{ github.ref_name }}`.
+            HoyuKey v1.0.${{ github.run_number }}
+            (Phiên bản được build tự động)
 
-            - **Phiên bản**: `0.1.${{ github.run_number }}`
-            - **Commit**: `${{ github.sha }}`
-            - **Build**: #${{ github.run_number }}
+            Phiên bản: 1.0.${{ github.run_number }}
+            Commit: ${{ github.sha }} (Build #${{ github.run_number }})
 
-            #### 📦 Tải về:
-            - **`HoyuKey.exe`**: Tải về và nhấp đúp để chạy trực tiếp trên Windows (đã tích hợp icon ứng dụng và hỗ trợ màn hình 4K sắc nét).
+            | File | Dành cho |
+            | :--- | :--- |
+            | HoyuKey.exe | Windows x64 |
           prerelease: true
           draft: false
           files: |
