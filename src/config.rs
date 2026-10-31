@@ -215,7 +215,7 @@ impl Config {
                 "limit_ram" => self.limit_ram = val == "true",
                 "max_ram_mb" => {
                     if let Ok(v) = val.parse::<u32>() {
-                        self.max_ram_mb = v.clamp(1, 16);
+                        self.max_ram_mb = v.clamp(0, 16);
                     }
                 }
                 // Tương thích ngược: Bỏ qua các trường lạ/chưa hỗ trợ mà không làm hỏng cấu hình
@@ -323,7 +323,7 @@ mod tests {
         assert_eq!(config.smart_english, true);
         assert_eq!(config.remember_app_state, false);
         assert_eq!(config.limit_ram, false);
-        assert_eq!(config.max_ram_mb, 2);
+        assert_eq!(config.max_ram_mb, 1);
     }
 
     #[test]
@@ -334,11 +334,11 @@ mod tests {
         assert_eq!(config.limit_ram, true);
         assert_eq!(config.max_ram_mb, 4);
 
-        // Kiểm tra mốc an toàn tối thiểu 1 MB (không được nhỏ hơn 1)
-        let json_unsafe = r#"{"limit_ram": true, "max_ram_mb": 0}"#;
+        // Kiểm tra mốc 0 (512 KB)
+        let json_512k = r#"{"limit_ram": true, "max_ram_mb": 0}"#;
         let mut config2 = Config::default();
-        config2.merge_from_json(json_unsafe);
-        assert_eq!(config2.max_ram_mb, 1);
+        config2.merge_from_json(json_512k);
+        assert_eq!(config2.max_ram_mb, 0);
     }
 
     #[test]

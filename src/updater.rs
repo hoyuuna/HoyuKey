@@ -106,26 +106,32 @@ pub fn close_modal(hwnd: HWND) {
     crate::ui::close_modal_anim(hwnd);
 }
 
+pub const UPDATE_URL: &str = "https://api.github.com/repos/hoyuuna/HoyuKey/releases/latest";
+
 fn fetch_latest_release_info() -> Result<(String, String, String), String> {
-    let url = "https://api.github.com/repos/hoyuuna/HoyuKey/releases/latest";
-    let json_bytes = http_get(url)?;
+    let json_bytes = http_get(UPDATE_URL)?;
     let json_str = String::from_utf8_lossy(&json_bytes);
 
-    let tag_name = extract_json_field(&json_str, "tag_name")
-        .ok_or_else(|| "Không tìm thấy tag_name".to_string())?;
+    // Hỗ trợ cả định dạng máy chủ web riêng (version, download_url, changelog)
+    // lẫn định dạng GitHub Releases API (tag_name, assets[].browser_download_url, body)
+    let tag_name = extract_json_field(&json_str, "version")
+        .or_else(|| extract_json_field(&json_str, "tag_name"))
+        .ok_or_else(|| "Không tìm thấy version hoặc tag_name".to_string())?;
 
-    let download_url = extract_download_url(&json_str)
-        .ok_or_else(|| "Không tìm thấy file tải về HoyuKey.exe".to_string())?;
+    let download_url = extract_json_field(&json_str, "download_url")
+        .or_else(|| extract_download_url(&json_str))
+        .ok_or_else(|| "Không tìm thấy download_url hoặc file tải về HoyuKey.exe".to_string())?;
 
-    let body = extract_json_body(&json_str).unwrap_or_else(|| {
-        "• Bản cập nhật mới nhất cho HoyuKey với nhiều tối ưu và sửa lỗi.".to_string()
-    });
+    let body = extract_json_body_by_key(&json_str, "\"changelog\":")
+        .or_else(|| extract_json_body_by_key(&json_str, "\"body\":"))
+        .unwrap_or_else(|| {
+            "• Bản cập nhật mới nhất cho HoyuKey với nhiều tối ưu và sửa lỗi.".to_string()
+        });
 
     Ok((tag_name, download_url, body))
 }
 
-fn extract_json_body(json: &str) -> Option<String> {
-    let key = "\"body\":";
+fn extract_json_body_by_key(json: &str, key: &str) -> Option<String> {
     let start_idx = json.find(key)? + key.len();
     let sub = json[start_idx..].trim_start();
     if !sub.starts_with('"') {
@@ -300,8 +306,10 @@ fn perform_update(hwnd: HWND, download_url: &str) {
 
     // 2. Tạo script cập nhật tự động
     let exe_name = current_exe.file_name().unwrap_or_default().to_string_lossy();
+    // Vòng lặp retry tự động: đợi process cũ đóng file hoàn toàn rồi mới ghi đè,
+    // giữ nguyên 100% đường dẫn file, Registry Startup và config.json
     let bat_content = format!(
-        "@echo off\r\ntimeout /t 1 /nobreak >nul\r\nmove /y \"HoyuKey_new.exe\" \"{}\"\r\nstart \"\" \"{}\"\r\ndel \"%~f0\"\r\n",
+        "@echo off\r\nsetlocal\r\ncd /d \"%~dp0\"\r\n:retry\r\ntimeout /t 1 /nobreak >nul\r\nmove /y \"HoyuKey_new.exe\" \"{}\" >nul 2>&1\r\nif exist \"HoyuKey_new.exe\" goto retry\r\nstart \"\" \"{}\"\r\ndel \"%~f0\"\r\n",
         exe_name, exe_name
     );
 
@@ -311,10 +319,15 @@ fn perform_update(hwnd: HWND, download_url: &str) {
         return;
     }
 
-    // 3. Chạy script và thoát
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", &bat_file.to_string_lossy()])
-        .spawn();
+    // 3. Chạy script ngầm (không nháy cửa sổ console đen) và thoát ứng dụng
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/C", &bat_file.to_string_lossy()]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let _ = cmd.spawn();
 
     unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);

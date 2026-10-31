@@ -223,7 +223,8 @@ impl Engine {
                 if config.auto_restore && !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&self.current_word) {
                     let bs = self.current_word.chars().count();
                     let text = self.raw_keys.clone();
-                    self.reset();
+                    self.current_word = text.clone();
+                    self.has_transformed = false;
                     return KeyAction::Transform {
                         backspaces: bs,
                         text,
@@ -1032,8 +1033,8 @@ mod tests {
         config.auto_caps_line = false;
         config.modern_tone = true;
 
-        // Câu kiểm tra tổng hợp (Pangram chèn đủ 6 thanh & ký tự đặc biệt)
-        let input = "Traanf Vux Hairs Ddawng, mootj chuyeen gia xur lys phims ngoawfn ngoeof, ddang coos gawngs hoanf thieenj booj gox tuyeetj vowif nayf!";
+        // "Trần Vũ Hải Đăng, một chuyên gia xử lý phím ngoằn ngoèo, đang cố gắng hoàn thiện bộ gõ tuyệt vời này!"
+        let input = "Traanf Vux Hair Ddawng, mootj chuyeen gia xuwr lys phims ngoawfn ngoeof, ddang coos gawngs hoanf thieenj booj gox tuyeetj vowif nayf!";
         let res = simulate_type(&mut engine, &config, input);
         assert_eq!(
             res,
@@ -1042,7 +1043,7 @@ mod tests {
 
         // Test với full CapsLock:
         engine.reset();
-        let input_caps = "TRAANF VUX HAIRS DDAWNG, MOOTJ CHUYEEN GIA XUR LYS PHIMS NGOAWFN NGOEOF, DDANG COOS GAWNGS HOANF THIEENJ BOOJ GOX TUYEETJ VOWIF NAYF!";
+        let input_caps = "TRAANF VUX HAIR DDAWNG, MOOTJ CHUYEEN GIA XUWR LYS PHIMS NGOAWFN NGOEOF, DDANG COOS GAWNGS HOANF THIEENJ BOOJ GOX TUYEETJ VOWIF NAYF!";
         let res_caps = simulate_type(&mut engine, &config, input_caps);
         assert_eq!(
             res_caps,
@@ -1058,7 +1059,7 @@ mod tests {
         config.modern_tone = true;
 
         // "Con chim hoẵng quắt queo nhảy qua khoảnh sân ngoằn ngoèo, xoắn quẩy trong buổi chiều muộn."
-        let sentence = "Con chim hoawxng quawst queo nhayr qua khoarnh saan ngoawfn ngoeof, xoawns quarry trong buoir chieewf muoonj.";
+        let sentence = "Con chim hoawxng quawst queo nhayr qua khoarnh saan ngoawfn ngoeof, xoawns quaayr trong buooir chieeuf muoonj.";
         let res = simulate_type(&mut engine, &config, sentence);
         assert_eq!(
             res,
@@ -1067,7 +1068,7 @@ mod tests {
 
         // CapsLock toàn bộ câu:
         engine.reset();
-        let sentence_caps = "CON CHIM HOAWXNG QUAWST QUEO NHAYR QUA KHOARNH SAAN NGOAWFN NGOEOF, XOAWNS QUARRY TRONG BUOIR CHIEEWF MUOONJ.";
+        let sentence_caps = "CON CHIM HOAWXNG QUAWST QUEO NHAYR QUA KHOARNH SAAN NGOAWFN NGOEOF, XOAWNS QUAAYR TRONG BUOOIR CHIEEUF MUOONJ.";
         let res_caps = simulate_type(&mut engine, &config, sentence_caps);
         assert_eq!(
             res_caps,
@@ -1107,15 +1108,15 @@ mod tests {
         config_modern.auto_caps_line = false;
         config_modern.modern_tone = true;
 
-        // Hòa bình dưới cơn mưa thủy tinh làm bừng sáng cả góc trời thuở ấy (chuẩn mới)
-        let input = "Hoaf binhf duowis coern muwa thuyr tinh lamf buwngf sangs car goocj troeif thuowr aays.";
+        // Chuẩn mới (hoà, thuỷ - dấu đặt trên nguyên âm thứ 2: a, y):
+        let input = "Hoaf binhf duowis cown muwa thuyr tinh lamf buwngf sangs car gocs troeif thuowr aays.";
         let res_modern = simulate_type(&mut engine, &config_modern, input);
         assert_eq!(
             res_modern,
-            "Hòa bình dưới cơn mưa thủy tinh làm bừng sáng cả góc trời thuở ấy."
+            "Hoà bình dưới cơn mưa thuỷ tinh làm bừng sáng cả góc trời thuở ấy."
         );
 
-        // Chuẩn cũ (hoà, thuỷ):
+        // Chuẩn cũ (hòa, thủy - dấu đặt trên âm đệm o, u):
         let mut config_old = Config::default();
         config_old.auto_caps_line = false;
         config_old.modern_tone = false;
@@ -1123,16 +1124,16 @@ mod tests {
         let res_old = simulate_type(&mut engine, &config_old, input);
         assert_eq!(
             res_old,
-            "Hoà bình dưới cơn mưa thuỷ tinh làm bừng sáng cả góc trời thuở ấy."
+            "Hòa bình dưới cơn mưa thủy tinh làm bừng sáng cả góc trời thuở ấy."
         );
 
         // CapsLock chuẩn mới:
         engine.reset();
-        let input_caps = "HOAF BINHF DUOWIS COERN MUWA THUYR TINH LAMF BUWNGF SANGS CAR GOOCJ TROEIF THUOWR AAYS.";
+        let input_caps = "HOAF BINHF DUOWIS COWN MUWA THUYR TINH LAMF BUWNGF SANGS CAR GOCS TROEIF THUOWR AAYS.";
         let res_caps = simulate_type(&mut engine, &config_modern, input_caps);
         assert_eq!(
             res_caps,
-            "HÒA BÌNH DƯỚI CƠN MƯA THỦY TINH LÀM BỪNG SÁNG CẢ GÓC TRỜI THUỞ ẤY."
+            "HOÀ BÌNH DƯỚI CƠN MƯA THUỶ TINH LÀM BỪNG SÁNG CẢ GÓC TRỜI THUỞ ẤY."
         );
     }
 
@@ -1144,7 +1145,7 @@ mod tests {
         config.smart_english = true;
 
         // "Developer đang debug ứng dụng trên Visual Studio Code, cài đặt PostgREST, Tailwind CSS và Supabase."
-        let input = "Developer ddang debug uwngs dujng treen Visual Studio Code, caif dtawtj PostgREST, Tailwind CSS vaaf Supabase.";
+        let input = "Developer ddang debug uwngs dujng treen Visual Studio Code, caif ddawtj PostgREST, Tailwind CSS vaf Supabase.";
         let res = simulate_type(&mut engine, &config, input);
         assert_eq!(
             res,

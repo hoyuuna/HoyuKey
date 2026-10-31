@@ -247,12 +247,10 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
     // 4. Áp dụng modifier mũ/móc/trăng TỰ DO cho nguyên âm bên trong từ (kể cả khi đã có phụ âm cuối)
     // Sửa dứt điểm việc gõ 'hienej' -> 'hiện', 'viete' -> 'viêt', 'duocw' -> 'dược'
     if free_marking {
-        // Chỉ phím 'w' (dấu móc / trăng) mới được phép tác động xuyên qua phụ âm cuối (ví dụ 'duoc' + 'w' -> 'dược').
-        // Với các phím nguyên âm 'a', 'e', 'o': nếu từ đã có phụ âm cuối (ký tự cuối là phụ âm),
-        // việc gõ 'a', 'e', 'o' là người dùng bắt đầu gõ âm tiết mới (ví dụ 'cacao', 'meta', 'topo'),
-        // tuyệt đối không được nhảy ngược về nguyên âm trước đó để tạo mũ hay undo.
-        let last_is_consonant = decompose_vietnamese_char(last_c).is_none();
-        if last_is_consonant && key != 'w' {
+        // Chỉ duy nhất phím 'w' (dấu móc / trăng) mới được phép tác động tự do vào nguyên âm trước đó.
+        // Các phím nguyên âm 'a', 'e', 'o' chỉ tạo mũ khi gõ liền kề (aa->â, ee->ê, oo->ô),
+        // tuyệt đối không được nhảy cóc qua nguyên âm khác (ví dụ: 'ngoe' + 'o' phải là 'ngoeo', không được thành 'ngôe'!).
+        if key != 'w' {
             return None;
         }
 
