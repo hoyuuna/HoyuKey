@@ -463,9 +463,14 @@ unsafe extern "system" fn settings_wnd_proc(
                 advance_anim(if config.limit_ram { 1000 } else { 0 }, &RAM_LIMIT_PROGRESS);
                 advance_anim(if config.limit_ram { 1000 } else { 0 }, &RAM_LIMIT_ANIM);
 
-                // 3. Easing cuộn nội dung mượt mà 60 FPS
+                // 3. Easing cuộn nội dung mượt mà 60 FPS (tự động kẹp theo max_scroll động)
+                let page = CURRENT_PAGE.load(Ordering::SeqCst);
+                let max_scroll = get_max_scroll_for_page(page);
+                let target_scroll = TARGET_SCROLL_Y.load(Ordering::SeqCst).min(max_scroll);
+                if target_scroll != TARGET_SCROLL_Y.load(Ordering::SeqCst) {
+                    TARGET_SCROLL_Y.store(target_scroll, Ordering::SeqCst);
+                }
                 let curr_scroll = SCROLL_Y.load(Ordering::SeqCst);
-                let target_scroll = TARGET_SCROLL_Y.load(Ordering::SeqCst);
                 if curr_scroll != target_scroll {
                     still_animating = true;
                     let diff = target_scroll - curr_scroll;
@@ -558,12 +563,13 @@ unsafe extern "system" fn settings_wnd_proc(
         }
         WM_MOUSEWHEEL => {
             let page = CURRENT_PAGE.load(Ordering::SeqCst);
-            if page == 0 {
+            let max_scroll = get_max_scroll_for_page(page);
+            if max_scroll > 0 {
                 let delta = ((wparam >> 16) & 0xFFFF) as i16;
                 let current_target = TARGET_SCROLL_Y.load(Ordering::SeqCst);
                 let scroll_step = 42;
                 let new_target = if delta < 0 {
-                    (current_target + scroll_step).min(80)
+                    (current_target + scroll_step).min(max_scroll)
                 } else {
                     (current_target - scroll_step).max(0)
                 };
@@ -585,6 +591,21 @@ unsafe extern "system" fn settings_wnd_proc(
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+
+fn get_max_scroll_for_page(page: u8) -> i32 {
+    match page {
+        0 => 80,
+        2 => {
+            let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
+            let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
+            let extra_h = (82.0 * anim_ease).round() as i32;
+            let content_bottom = 558 + extra_h;
+            (content_bottom - 576).max(0)
+        }
+        _ => 0,
     }
 }
 
@@ -675,31 +696,37 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
         }
     } else {
         // --- CÁC TRANG CON ---
-        // Nút Back tròn ở đầu: (card_x, 20) kích thước 40x40
+        // Nút Back tròn ở đầu: (card_x, 20) kích thước 40x40 (Cố định, không cuộn)
         if x >= card_x && x <= card_x + 40 && y >= 20 && y <= 60 {
             return 20;
         }
+        if y < 70 {
+            return -1;
+        }
+
+        let scroll_y = SCROLL_Y.load(Ordering::SeqCst);
+        let y_content = y + scroll_y;
 
         if page == 1 {
             // Cài đặt đánh máy:
             let tab_x = right_ctrl - 200;
-            if x >= tab_x && x <= right_ctrl && y >= 95 && y <= 145 {
+            if x >= tab_x && x <= right_ctrl && y_content >= 95 && y_content <= 145 {
                 return 40;
             }
             if x >= right_ctrl - 52 && x <= right_ctrl {
-                if y >= 180 && y <= 224 {
+                if y_content >= 180 && y_content <= 224 {
                     return 41;
                 }
-                if y >= 252 && y <= 296 {
+                if y_content >= 252 && y_content <= 296 {
                     return 42;
                 }
-                if y >= 324 && y <= 368 {
+                if y_content >= 324 && y_content <= 368 {
                     return 43;
                 }
-                if y >= 396 && y <= 440 {
+                if y_content >= 396 && y_content <= 440 {
                     return 44;
                 }
-                if y >= 468 && y <= 512 {
+                if y_content >= 468 && y_content <= 512 {
                     return 45;
                 }
             }
@@ -707,20 +734,20 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             // Cài đặt HoyuKey:
             let sw_tab_x = card_x + 20;
             let sw_total_w = card_w - 40;
-            if x >= sw_tab_x && x <= sw_tab_x + sw_total_w && y >= 152 && y <= 196 {
+            if x >= sw_tab_x && x <= sw_tab_x + sw_total_w && y_content >= 152 && y_content <= 196 {
                 return 46;
             }
             if x >= right_ctrl - 52 && x <= right_ctrl {
-                if y >= 234 && y <= 274 {
+                if y_content >= 234 && y_content <= 274 {
                     return 47;
                 }
-                if y >= 346 && y <= 386 {
+                if y_content >= 346 && y_content <= 386 {
                     return 49; // Thông báo khởi động
                 }
-                if y >= 418 && y <= 458 {
+                if y_content >= 418 && y_content <= 458 {
                     return 50; // Thông báo chuyển ngôn ngữ
                 }
-                if y >= 498 && y <= 538 {
+                if y_content >= 498 && y_content <= 538 {
                     return 48; // Điều chỉnh RAM chạy nền
                 }
             }
@@ -728,7 +755,7 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             if anim_p > 200 {
                 let pill_y = 598;
                 let pill_h = 34;
-                if y >= pill_y && y <= pill_y + pill_h {
+                if y_content >= pill_y && y_content <= pill_y + pill_h {
                     let total_w = card_w - 40;
                     let btn_w = (total_w - 18) / 4;
                     for idx in 0..4 {
@@ -745,25 +772,25 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             let btn_update_x = card_x + (card_w - btn_update_w) / 2;
             let btn_update_y = 250;
             let btn_update_h = 42;
-            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y >= btn_update_y && y <= btn_update_y + btn_update_h {
+            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y_content >= btn_update_y && y_content <= btn_update_y + btn_update_h {
                 return 25;
             }
         } else if page == 4 {
             // Hỗ trợ viết:
             if x >= right_ctrl - 52 && x <= right_ctrl {
-                if y >= 96 && y <= 140 {
+                if y_content >= 96 && y_content <= 140 {
                     return 61;
                 }
-                if y >= 170 && y <= 214 {
+                if y_content >= 170 && y_content <= 214 {
                     return 62;
                 }
-                if y >= 244 && y <= 288 {
+                if y_content >= 244 && y_content <= 288 {
                     return 63;
                 }
             }
         } else if page == 5 {
             // Nâng cao:
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 96 && y <= 140 {
+            if x >= right_ctrl - 52 && x <= right_ctrl && y_content >= 96 && y_content <= 140 {
                 return 71;
             }
             let input_anim = BROWSER_INPUT_ANIM.load(Ordering::SeqCst);
@@ -772,7 +799,7 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
                 let box_w = card_w - 40;
                 let box_y = 160;
                 let box_h = 42;
-                if x >= box_x && x <= box_x + box_w && y >= box_y && y <= box_y + box_h {
+                if x >= box_x && x <= box_x + box_w && y_content >= box_y && y_content <= box_y + box_h {
                     return 72;
                 }
             }
@@ -781,7 +808,7 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
             let card1_h = (68.0 + 64.0 * anim_ease).round() as i32;
             let card2_y = 86 + card1_h + 14;
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= card2_y + 10 && y <= card2_y + 54 {
+            if x >= right_ctrl - 52 && x <= right_ctrl && y_content >= card2_y + 10 && y_content <= card2_y + 54 {
                 return 73;
             }
         }
@@ -886,17 +913,24 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
         }
     } else {
         // --- XỬ LÝ CÁC TRANG CON ---
+        // Nút Back tròn cố định ở (card_x, 20)
         if x >= card_x && x <= card_x + 40 && y >= 20 && y <= 60 {
             start_page_transition(hwnd, 0, -1);
             return;
         }
+        if y < 70 {
+            return;
+        }
+
+        let scroll_y = SCROLL_Y.load(Ordering::SeqCst);
+        let y_content = y + scroll_y;
 
         let mut state = GLOBAL_STATE.lock().unwrap();
         let mut changed = false;
 
         if page == 1 {
             let tab_x = right_ctrl - 200;
-            if y >= 95 && y <= 145 {
+            if y_content >= 95 && y_content <= 145 {
                 if x >= tab_x && x <= tab_x + 96 {
                     if state.config.input_method != InputMethod::Telex {
                         state.config.input_method = InputMethod::Telex;
@@ -911,19 +945,19 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             }
 
             if x >= right_ctrl - 52 && x <= right_ctrl {
-                if y >= 180 && y <= 224 {
+                if y_content >= 180 && y_content <= 224 {
                     state.config.modern_tone = !state.config.modern_tone;
                     changed = true;
-                } else if y >= 252 && y <= 296 {
+                } else if y_content >= 252 && y_content <= 296 {
                     state.config.free_marking = !state.config.free_marking;
                     changed = true;
-                } else if y >= 324 && y <= 368 {
+                } else if y_content >= 324 && y_content <= 368 {
                     state.config.modify_tone_in_word = !state.config.modify_tone_in_word;
                     changed = true;
-                } else if y >= 396 && y <= 440 {
+                } else if y_content >= 396 && y_content <= 440 {
                     state.config.smart_english = !state.config.smart_english;
                     changed = true;
-                } else if y >= 468 && y <= 512 {
+                } else if y_content >= 468 && y_content <= 512 {
                     state.config.auto_restore = !state.config.auto_restore;
                     changed = true;
                 }
@@ -932,7 +966,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             let sw_tab_x = card_x + 20;
             let sw_total_w = card_w - 40;
             let sw_tab_w = (sw_total_w - 8) / 2;
-            if y >= 152 && y <= 196 {
+            if y_content >= 152 && y_content <= 196 {
                 if x >= sw_tab_x && x <= sw_tab_x + sw_tab_w + 4 {
                     if state.config.switch_key != SwitchKey::CtrlShift {
                         state.config.switch_key = SwitchKey::CtrlShift;
@@ -944,18 +978,18 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                         changed = true;
                     }
                 }
-            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 234 && y <= 274 {
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y_content >= 234 && y_content <= 274 {
                 let new_val = !state.config.start_with_windows;
                 state.config.start_with_windows = new_val;
                 crate::autostart::set_autostart(new_val);
                 changed = true;
-            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 346 && y <= 386 {
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y_content >= 346 && y_content <= 386 {
                 state.config.notify_on_startup = !state.config.notify_on_startup;
                 changed = true;
-            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 418 && y <= 458 {
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y_content >= 418 && y_content <= 458 {
                 state.config.notify_on_toggle = !state.config.notify_on_toggle;
                 changed = true;
-            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 498 && y <= 538 {
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y_content >= 498 && y_content <= 538 {
                 state.config.limit_ram = !state.config.limit_ram;
                 crate::apply_ram_limiter(&state.config);
                 changed = true;
@@ -964,7 +998,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                 if anim_p > 200 {
                     let pill_y = 598;
                     let pill_h = 34;
-                    if y >= pill_y && y <= pill_y + pill_h {
+                    if y_content >= pill_y && y_content <= pill_y + pill_h {
                         let total_w = card_w - 40;
                         let btn_w = (total_w - 18) / 4;
                         let presets = [0, 1, 2, 4];
@@ -988,7 +1022,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             let btn_update_x = card_x + (card_w - btn_update_w) / 2;
             let btn_update_y = 250;
             let btn_update_h = 42;
-            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y >= btn_update_y && y <= btn_update_y + btn_update_h {
+            if x >= btn_update_x && x <= btn_update_x + btn_update_w && y_content >= btn_update_y && y_content <= btn_update_y + btn_update_h {
                 drop(state);
                 crate::updater::start_checking_update(hwnd);
                 return;
@@ -996,20 +1030,20 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
         } else if page == 4 {
             // Hỗ trợ viết
             if x >= right_ctrl - 52 && x <= right_ctrl {
-                if y >= 96 && y <= 140 {
+                if y_content >= 96 && y_content <= 140 {
                     state.config.auto_caps_line = !state.config.auto_caps_line;
                     changed = true;
-                } else if y >= 170 && y <= 214 {
+                } else if y_content >= 170 && y_content <= 214 {
                     state.config.auto_caps_sentence = !state.config.auto_caps_sentence;
                     changed = true;
-                } else if y >= 244 && y <= 288 {
+                } else if y_content >= 244 && y_content <= 288 {
                     state.config.auto_period_enter = !state.config.auto_period_enter;
                     changed = true;
                 }
             }
         } else if page == 5 {
             // Hỗ trợ Tương thích trình duyệt trong Nâng cao
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 96 && y <= 140 {
+            if x >= right_ctrl - 52 && x <= right_ctrl && y_content >= 96 && y_content <= 140 {
                 state.config.browser_compatibility = !state.config.browser_compatibility;
                 changed = true;
             }
@@ -1018,7 +1052,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
             let card1_h = (68.0 + 64.0 * anim_ease).round() as i32;
             let card2_y = 86 + card1_h + 14;
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= card2_y + 10 && y <= card2_y + 54 {
+            if x >= right_ctrl - 52 && x <= right_ctrl && y_content >= card2_y + 10 && y_content <= card2_y + 54 {
                 state.config.remember_app_state = !state.config.remember_app_state;
                 changed = true;
             }
@@ -1029,7 +1063,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                 let box_w = card_w - 40;
                 let box_y = 160;
                 let box_h = 42;
-                if x >= box_x && x <= box_x + box_w && y >= box_y && y <= box_y + box_h {
+                if x >= box_x && x <= box_x + box_w && y_content >= box_y && y_content <= box_y + box_h {
                     BROWSER_INPUT_FOCUSED.store(true, Ordering::SeqCst);
                     unsafe { InvalidateRect(hwnd, null_mut(), 0); }
                 } else {
@@ -1175,11 +1209,7 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
     // Đặt vùng Clip cho nội dung cuộn (0..584), giữ dock đáy cố định hoàn toàn
     GdipSetClipRectI(graphics, 0, 0, w, 584, CombineModeReplace);
 
-    let scroll_y = if current_page == 0 || target_page == 0 {
-        SCROLL_Y.load(Ordering::SeqCst) as f32
-    } else {
-        0.0
-    };
+    let scroll_y = SCROLL_Y.load(Ordering::SeqCst) as f32;
 
     if trans_raw >= 1000 {
         render_page_elements(
@@ -1466,12 +1496,13 @@ unsafe fn render_page_elements(
     let card_x = (base_card_x as f32 + offset_x).round() as i32;
     let right_ctrl = (base_right_ctrl as f32 + offset_x).round() as i32;
     let left_text = (base_left_text as f32 + offset_x).round() as i32;
+    let sy = scroll_y.round() as i32;
 
     if page == 0 {
         // ========================================================
         // 🏠 TRANG CHỦ (HOME DASHBOARD) - CÓ THỂ CUỘN CHUỘT MƯỢT MÀ
         // ========================================================
-        let sy = scroll_y.round() as i32;
+
 
         // 1. Header tinh gọn: Logo 48x48 + Tiêu đề "DASHBOARD"
         gdiplus_draw_image(graphics, card_x, 22 - sy, 48, 48, LOGO_BGRA_128, 128, 128);
@@ -1562,26 +1593,19 @@ unsafe fn render_page_elements(
 
     } else {
         // ========================================================
-        // 📱 CÁC TRANG CON (SUBPAGES)
+        // 📱 CÁC TRANG CON (SUBPAGES) - CÁC THÀNH PHẦN CUỘN NẰM PHÍA SAU
         // ========================================================
-        let back_bg = if hover_id == 20 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 20, 40, 40, 20, back_bg, ARGB_CARD_BORDER, 1.0);
-        draw_vector_chevron_left(graphics, card_x + 20, 40, ARGB_TEXT_PRIMARY);
-
         if page == 1 {
-            // --- Trang Cài đặt đánh máy ---
-            draw_gdip_text(graphics, font_sub_title, "Cài đặt đánh máy", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
-
             // Card 1: Kiểu gõ chính (y = 86..162, cao 76px)
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-            draw_gdip_text(graphics, font_bold, "Kiểu gõ chính", left_text, 99, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Telex hoặc VNI", left_text, 125, ARGB_TEXT_MUTED, false);
+            gdiplus_draw_rounded_card(graphics, card_x, 86 - sy, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            draw_gdip_text(graphics, font_bold, "Kiểu gõ chính", left_text, 99 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Telex hoặc VNI", left_text, 125 - sy, ARGB_TEXT_MUTED, false);
 
             let method_progress = INPUT_METHOD_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_tabs(
                 graphics,
                 right_ctrl - 200,
-                102,
+                102 - sy,
                 &["Telex", "VNI"],
                 96,
                 36,
@@ -1590,54 +1614,51 @@ unsafe fn render_page_elements(
             );
 
             // Card 2: 5 Tùy chọn đánh máy thông minh (y = 174..530, cao 356px)
-            gdiplus_draw_rounded_card(graphics, card_x, 174, card_w, 356, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, card_x, 174 - sy, card_w, 356, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Bỏ dấu kiểu mới
-            draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 188, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Đặt dấu ở âm thứ hai (hòa, thúy thay vì hoà, thuý)", left_text, 212, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 188 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Đặt dấu ở âm thứ hai (hòa, thúy thay vì hoà, thuý)", left_text, 212 - sy, ARGB_TEXT_MUTED, false);
             let tone_progress = MODERN_TONE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 194, tone_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 194 - sy, tone_progress);
 
-            gdiplus_draw_line(graphics, left_text, 246, right_ctrl, 246, ARGB_DIVIDER, 1.0);
+            gdiplus_draw_line(graphics, left_text, 246 - sy, right_ctrl, 246 - sy, ARGB_DIVIDER, 1.0);
 
             // 2. Bỏ dấu tự do
-            draw_gdip_text(graphics, font_bold, "Bỏ dấu tự do", left_text, 260, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Gõ dấu hoặc thêm mũ ở bất kỳ vị trí nào trong từ", left_text, 284, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Bỏ dấu tự do", left_text, 260 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Gõ dấu hoặc thêm mũ ở bất kỳ vị trí nào trong từ", left_text, 284 - sy, ARGB_TEXT_MUTED, false);
             let free_marking_progress = FREE_MARKING_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 266, free_marking_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 266 - sy, free_marking_progress);
 
-            gdiplus_draw_line(graphics, left_text, 318, right_ctrl, 318, ARGB_DIVIDER, 1.0);
+            gdiplus_draw_line(graphics, left_text, 318 - sy, right_ctrl, 318 - sy, ARGB_DIVIDER, 1.0);
 
             // 3. Tự chỉnh dấu khi sửa từ
-            draw_gdip_text(graphics, font_bold, "Tự chỉnh dấu khi sửa từ", left_text, 332, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Tự động đổi vị trí dấu khi chèn ký tự vào giữa từ", left_text, 356, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Tự chỉnh dấu khi sửa từ", left_text, 332 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Tự động đổi vị trí dấu khi chèn ký tự vào giữa từ", left_text, 356 - sy, ARGB_TEXT_MUTED, false);
             let modify_progress = MODIFY_TONE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 338, modify_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 338 - sy, modify_progress);
 
-            gdiplus_draw_line(graphics, left_text, 390, right_ctrl, 390, ARGB_DIVIDER, 1.0);
+            gdiplus_draw_line(graphics, left_text, 390 - sy, right_ctrl, 390 - sy, ARGB_DIVIDER, 1.0);
 
             // 4. Nhận diện tiếng Anh
-            draw_gdip_text(graphics, font_bold, "Nhận diện tiếng Anh", left_text, 404, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Giữ nguyên từ tiếng Anh thông dụng (file, fix, link, game)", left_text, 428, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Nhận diện tiếng Anh", left_text, 404 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Giữ nguyên từ tiếng Anh thông dụng (file, fix, link, game)", left_text, 428 - sy, ARGB_TEXT_MUTED, false);
             let smart_english_progress = SMART_ENGLISH_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 410, smart_english_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 410 - sy, smart_english_progress);
 
-            gdiplus_draw_line(graphics, left_text, 462, right_ctrl, 462, ARGB_DIVIDER, 1.0);
+            gdiplus_draw_line(graphics, left_text, 462 - sy, right_ctrl, 462 - sy, ARGB_DIVIDER, 1.0);
 
             // 5. Khôi phục phím khi gõ sai
-            draw_gdip_text(graphics, font_bold, "Khôi phục phím khi gõ sai", left_text, 476, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Hoàn lại ký tự ban đầu khi nhập từ không hợp lệ", left_text, 500, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Khôi phục phím khi gõ sai", left_text, 476 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Hoàn lại ký tự ban đầu khi nhập từ không hợp lệ", left_text, 500 - sy, ARGB_TEXT_MUTED, false);
             let restore_progress = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 482, restore_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 482 - sy, restore_progress);
 
         } else if page == 2 {
-            // --- Trang Cài đặt HoyuKey ---
-            draw_gdip_text(graphics, font_sub_title, "Cài đặt HoyuKey", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
-
             // Card 1: Phím tắt chuyển đổi chế độ (cao 122px, y = 86..208)
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 122, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-            draw_gdip_text(graphics, font_bold, "Phím tắt chuyển đổi", left_text, 102, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Chuyển nhanh giữa Tiếng Việt và Tiếng Anh", left_text, 126, ARGB_TEXT_MUTED, false);
+            gdiplus_draw_rounded_card(graphics, card_x, 86 - sy, card_w, 122, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            draw_gdip_text(graphics, font_bold, "Phím tắt chuyển đổi", left_text, 102 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Chuyển nhanh giữa Tiếng Việt và Tiếng Anh", left_text, 126 - sy, ARGB_TEXT_MUTED, false);
 
             let switch_progress = SWITCH_KEY_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             let sw_total_w = card_w - 40;
@@ -1645,7 +1666,7 @@ unsafe fn render_page_elements(
             draw_animated_tabs(
                 graphics,
                 left_text,
-                152,
+                152 - sy,
                 &["Ctrl + Shift", "Alt + Z"],
                 sw_tab_w,
                 36,
@@ -1654,43 +1675,41 @@ unsafe fn render_page_elements(
             );
 
             // Card 2: Khởi động cùng Windows (cao 76px, y = 220..296)
-            gdiplus_draw_rounded_card(graphics, card_x, 220, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-            draw_gdip_text(graphics, font_bold, "Khởi động cùng Windows", left_text, 234, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Tự động chạy HoyuKey khi đăng nhập máy tính", left_text, 258, ARGB_TEXT_MUTED, false);
+            gdiplus_draw_rounded_card(graphics, card_x, 220 - sy, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            draw_gdip_text(graphics, font_bold, "Khởi động cùng Windows", left_text, 234 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Tự động chạy HoyuKey khi đăng nhập máy tính", left_text, 258 - sy, ARGB_TEXT_MUTED, false);
             let autostart_progress = START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 241, autostart_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 241 - sy, autostart_progress);
 
-            // Mục nhỏ "THÔNG BÁO" (như chữ CÀI ĐẶT ở màn hình chính)
-            draw_gdip_text(graphics, font_section, "THÔNG BÁO", card_x + 4, 310, ARGB_STATUS_MUTED, false);
+            // Mục nhỏ "THÔNG BÁO"
+            draw_gdip_text(graphics, font_section, "THÔNG BÁO", card_x + 4, 310 - sy, ARGB_STATUS_MUTED, false);
 
             // Card Thông báo: 2 tùy chọn (cao 144px, y = 332..476)
-            gdiplus_draw_rounded_card(graphics, card_x, 332, card_w, 144, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, card_x, 332 - sy, card_w, 144, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Thông báo khởi động
-            draw_gdip_text(graphics, font_bold, "Thông báo khi khởi động", left_text, 346, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "HoyuKey đã kích hoạt và sẵn sàng!", left_text, 370, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Thông báo khi khởi động", left_text, 346 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "HoyuKey đã kích hoạt và sẵn sàng!", left_text, 370 - sy, ARGB_TEXT_MUTED, false);
             let notify_startup_p = NOTIFY_STARTUP_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 353, notify_startup_p);
+            draw_animated_switch(graphics, right_ctrl - 50, 353 - sy, notify_startup_p);
 
-            gdiplus_draw_line(graphics, left_text, 404, right_ctrl, 404, ARGB_DIVIDER, 1.0);
+            gdiplus_draw_line(graphics, left_text, 404 - sy, right_ctrl, 404 - sy, ARGB_DIVIDER, 1.0);
 
             // 2. Thông báo chuyển ngôn ngữ
-            draw_gdip_text(graphics, font_bold, "Thông báo chuyển ngôn ngữ", left_text, 418, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Hiện thông báo mỗi khi bật hoặc tắt Tiếng Việt", left_text, 442, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Thông báo chuyển ngôn ngữ", left_text, 418 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Hiện thông báo mỗi khi bật hoặc tắt Tiếng Việt", left_text, 442 - sy, ARGB_TEXT_MUTED, false);
             let notify_toggle_p = NOTIFY_TOGGLE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 425, notify_toggle_p);
+            draw_animated_switch(graphics, right_ctrl - 50, 425 - sy, notify_toggle_p);
 
             // Card 3: Điều chỉnh RAM chạy nền (Memory Limiter - y = 488..)
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
             let card3_h = (70.0 + 82.0 * anim_ease).round() as i32;
-            let card3_y = 488;
+            let card3_y = 488 - sy;
             gdiplus_draw_rounded_card(graphics, card_x, card3_y, card_w, card3_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             draw_gdip_text(graphics, font_bold, "Điều chỉnh RAM chạy nền", left_text, card3_y + 14, ARGB_TEXT_PRIMARY, false);
-            // Icon cảnh báo màu vàng hổ phách sau tiêu đề cho mục nhạy cảm
             draw_vector_warning_icon(graphics, left_text + 195, card3_y + 24, ARGB_ALERT_TEXT);
-
             draw_gdip_text(graphics, font_desc, "Em <3 RAM hãy cho em RAM~", left_text, card3_y + 38, ARGB_TEXT_MUTED, false);
             let ram_limit_p = RAM_LIMIT_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, card3_y + 20, ram_limit_p);
@@ -1745,24 +1764,21 @@ unsafe fn render_page_elements(
             }
 
         } else if page == 3 {
-            // --- Trang Giới thiệu (Tối giản: Logo, Tên, Phiên bản, Nút Kiểm tra, Changelog) ---
-            draw_gdip_text(graphics, font_sub_title, "Giới thiệu", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
-
             // Card 1: Logo, Tên & Nút Kiểm tra Cập nhật (y = 86..304, cao 218px)
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 218, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, card_x, 86 - sy, card_w, 218, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             let center_x = card_x + card_w / 2;
-            gdiplus_draw_image(graphics, center_x - 30, 104, 60, 60, LOGO_BGRA_128, 128, 128);
+            gdiplus_draw_image(graphics, center_x - 30, 104 - sy, 60, 60, LOGO_BGRA_128, 128, 128);
 
-            draw_gdip_text_centered(graphics, font_title, "HoyuKey", card_x, 172, card_w, 30, ARGB_TEXT_PRIMARY);
+            draw_gdip_text_centered(graphics, font_title, "HoyuKey", card_x, 172 - sy, card_w, 30, ARGB_TEXT_PRIMARY);
 
             let ver_text = format!("Phiên bản: v{}", crate::updater::CURRENT_VERSION);
-            draw_gdip_text_centered(graphics, font_desc, &ver_text, card_x, 206, card_w, 22, ARGB_TEXT_MUTED);
+            draw_gdip_text_centered(graphics, font_desc, &ver_text, card_x, 206 - sy, card_w, 22, ARGB_TEXT_MUTED);
 
             // Nút "Kiểm tra cập nhật" hiện đại
             let btn_update_w = 240;
             let btn_update_x = card_x + (card_w - btn_update_w) / 2;
-            let btn_update_y = 250;
+            let btn_update_y = 250 - sy;
             let btn_update_h = 42;
 
             let update_btn_bg = if hover_id == 25 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
@@ -1770,7 +1786,7 @@ unsafe fn render_page_elements(
             draw_gdip_text_centered(graphics, font_btn, "Kiểm tra cập nhật", btn_update_x, btn_update_y, btn_update_w, btn_update_h, ARGB_TEXT_DARK);
 
             // Card 2: Changelog Nhật ký thay đổi (Lấy động trực tiếp từ GitHub Releases)
-            let cl_y = 316;
+            let cl_y = 316 - sy;
             let cl_h = 244;
             gdiplus_draw_rounded_card(graphics, card_x, cl_y, card_w, cl_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
             draw_gdip_text(graphics, font_section, "NHẬT KÝ THAY ĐỔI", left_text, cl_y + 16, ARGB_STATUS_MUTED, false);
@@ -1804,67 +1820,58 @@ unsafe fn render_page_elements(
                 }
             }
         } else if page == 4 {
-            // --- Trang Hỗ trợ viết ---
-            draw_gdip_text(graphics, font_sub_title, "Hỗ trợ viết", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
-
             // Card 3 tùy chọn hỗ trợ soạn thảo (cao 214px, y = 86..300)
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, 214, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, card_x, 86 - sy, card_w, 214, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Tự động viết hoa đầu dòng
-            draw_gdip_text(graphics, font_bold, "Tự động viết hoa đầu dòng", left_text, 100, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Viết hoa chữ cái đầu tiên khi mở đầu dòng mới", left_text, 124, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Tự động viết hoa đầu dòng", left_text, 100 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Viết hoa chữ cái đầu tiên khi mở đầu dòng mới", left_text, 124 - sy, ARGB_TEXT_MUTED, false);
             let caps_line_p = AUTO_CAPS_LINE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 106, caps_line_p);
+            draw_animated_switch(graphics, right_ctrl - 50, 106 - sy, caps_line_p);
 
-            gdiplus_draw_line(graphics, left_text, 158, right_ctrl, 158, ARGB_DIVIDER, 1.0);
+            gdiplus_draw_line(graphics, left_text, 158 - sy, right_ctrl, 158 - sy, ARGB_DIVIDER, 1.0);
 
             // 2. Tự động viết hoa sau dấu chấm
-            draw_gdip_text(graphics, font_bold, "Tự động viết hoa sau dấu chấm", left_text, 172, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Viết hoa chữ cái đầu tiên sau các dấu ngắt câu (. ? !)", left_text, 196, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Tự động viết hoa sau dấu chấm", left_text, 172 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Viết hoa chữ cái đầu tiên sau các dấu ngắt câu (. ? !)", left_text, 196 - sy, ARGB_TEXT_MUTED, false);
             let caps_sent_p = AUTO_CAPS_SENTENCE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 178, caps_sent_p);
+            draw_animated_switch(graphics, right_ctrl - 50, 178 - sy, caps_sent_p);
 
-            gdiplus_draw_line(graphics, left_text, 230, right_ctrl, 230, ARGB_DIVIDER, 1.0);
+            gdiplus_draw_line(graphics, left_text, 230 - sy, right_ctrl, 230 - sy, ARGB_DIVIDER, 1.0);
 
             // 3. Tự động chấm câu khi xuống dòng
-            draw_gdip_text(graphics, font_bold, "Tự động chấm câu khi xuống dòng", left_text, 244, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Thêm dấu chấm nếu chưa có khi nhấn Enter hoặc gửi", left_text, 268, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Tự động chấm câu khi xuống dòng", left_text, 244 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Thêm dấu chấm nếu chưa có khi nhấn Enter hoặc gửi", left_text, 268 - sy, ARGB_TEXT_MUTED, false);
             let period_enter_p = AUTO_PERIOD_ENTER_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 250, period_enter_p);
+            draw_animated_switch(graphics, right_ctrl - 50, 250 - sy, period_enter_p);
         } else if page == 5 {
-            // --- Trang Nâng cao ---
-            draw_gdip_text(graphics, font_sub_title, "Nâng cao", card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
-
             let anim_p = BROWSER_INPUT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
 
-            // Chiều cao card co giãn mượt mà: khi tắt là 68px, khi bật mở rộng thêm 64px thành 132px (không còn cằm thừa!)
             let card_h = (68.0 + 64.0 * anim_ease).round() as i32;
-            gdiplus_draw_rounded_card(graphics, card_x, 86, card_w, card_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, card_x, 86 - sy, card_w, card_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Tương thích trình duyệt
-            draw_gdip_text(graphics, font_bold, "Tương thích trình duyệt", left_text, 98, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Khắc phục lỗi gõ trên thanh địa chỉ và gợi ý trình duyệt", left_text, 122, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_bold, "Tương thích trình duyệt", left_text, 98 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Khắc phục lỗi gõ trên thanh địa chỉ và gợi ý trình duyệt", left_text, 122 - sy, ARGB_TEXT_MUTED, false);
             let compat_p = BROWSER_COMPAT_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 104, compat_p);
+            draw_animated_switch(graphics, right_ctrl - 50, 104 - sy, compat_p);
 
-            // Ô text box xuất hiện với animation mượt mà (fade in/out + slide down/up)
             if anim_ease > 0.02 {
                 let alpha_u8 = (255.0 * anim_ease).clamp(0.0, 255.0) as u32;
                 let divider_color = (alpha_u8 << 24) | (ARGB_DIVIDER & 0x00FFFFFF);
-                gdiplus_draw_line(graphics, left_text, 146, right_ctrl, 146, divider_color, 1.0);
+                gdiplus_draw_line(graphics, left_text, 146 - sy, right_ctrl, 146 - sy, divider_color, 1.0);
 
                 let is_focused = BROWSER_INPUT_FOCUSED.load(Ordering::SeqCst);
                 let box_border = if is_focused { ARGB_WHITE } else { ARGB_CARD_BORDER };
                 let box_border_color = (alpha_u8 << 24) | (box_border & 0x00FFFFFF);
                 let box_bg_color = (alpha_u8 << 24) | (ARGB_PILL_TRACK & 0x00FFFFFF);
-                let box_y = 158;
+                let box_y = 158 - sy;
                 let box_w = card_w - 40;
                 let box_h = 42;
 
                 gdiplus_draw_rounded_card(graphics, left_text, box_y, box_w, box_h, 6, box_bg_color, box_border_color, 1.0);
 
-                // Lấy nội dung danh sách app (không reset khi tắt/bật)
                 let browser_apps_text = {
                     let state = GLOBAL_STATE.lock().unwrap();
                     state.config.browser_apps.clone()
@@ -1881,7 +1888,7 @@ unsafe fn render_page_elements(
             }
 
             // 2. Ghi nhớ trạng thái theo ứng dụng
-            let card2_y = 86 + card_h + 14;
+            let card2_y = 86 + card_h + 14 - sy;
             let card2_h = 68;
             gdiplus_draw_rounded_card(graphics, card_x, card2_y, card_w, card2_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
@@ -1890,6 +1897,25 @@ unsafe fn render_page_elements(
             let remember_p = REMEMBER_APP_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, card2_y + 18, remember_p);
         }
+
+        // ========================================================
+        // 🔙 STICKY HEADER CHO TẤT CẢ CÁC TRANG CON
+        // Nút Back tròn đặc màu ARGB_CARD_BG / HOVER cố định ở (card_x, 20)
+        // Tiêu đề trang con: FULL VIẾT HOA, nền trong suốt chữ vẽ trực tiếp
+        // ========================================================
+        let back_bg = if hover_id == 20 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+        gdiplus_draw_rounded_card(graphics, card_x, 20, 40, 40, 20, back_bg, ARGB_CARD_BORDER, 1.0);
+        draw_vector_chevron_left(graphics, card_x + 20, 40, ARGB_TEXT_PRIMARY);
+
+        let sub_title = match page {
+            1 => "CÀI ĐẶT ĐÁNH MÁY",
+            2 => "CÀI ĐẶT HOYUKEY",
+            3 => "GIỚI THIỆU",
+            4 => "HỖ TRỢ VIẾT",
+            5 => "NÂNG CAO",
+            _ => "",
+        };
+        draw_gdip_text(graphics, font_sub_title, sub_title, card_x + 54, 23, ARGB_TEXT_PRIMARY, false);
     }
 }
 
