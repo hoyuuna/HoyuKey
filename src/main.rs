@@ -265,13 +265,12 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 pub fn apply_ram_limiter(config: &Config) {
     unsafe {
+        SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
         if config.limit_ram {
             let max_mb = config.max_ram_mb.clamp(1, 16) as usize;
             let min_bytes = 512 * 1024;
             let max_bytes = max_mb * 1024 * 1024;
             SetProcessWorkingSetSize(GetCurrentProcess(), min_bytes, max_bytes);
-        } else {
-            SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
         }
     }
 }

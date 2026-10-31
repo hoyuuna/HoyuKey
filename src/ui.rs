@@ -293,6 +293,12 @@ pub fn show_settings_window() {
         RAM_LIMIT_PROGRESS.store(if state.config.limit_ram { 1000 } else { 0 }, Ordering::SeqCst);
         RAM_LIMIT_ANIM.store(if state.config.limit_ram { 1000 } else { 0 }, Ordering::SeqCst);
         HOVER_ITEM.store(-1, Ordering::SeqCst);
+        CURRENT_PAGE.store(0, Ordering::SeqCst);
+        TARGET_PAGE.store(0, Ordering::SeqCst);
+        TRANSITION_PROGRESS.store(1000, Ordering::SeqCst);
+        SCROLL_Y.store(0, Ordering::SeqCst);
+        TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+        MODAL_ANIM_PROGRESS.store(0, Ordering::SeqCst);
         drop(state);
 
         unsafe {
@@ -566,7 +572,10 @@ unsafe extern "system" fn settings_wnd_proc(
             0
         }
         WM_DESTROY => {
+            SETTINGS_HWND.store(0, Ordering::SeqCst);
             shutdown_ui_subsystems();
+            let config = GLOBAL_STATE.lock().unwrap().config.clone();
+            crate::apply_ram_limiter(&config);
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
