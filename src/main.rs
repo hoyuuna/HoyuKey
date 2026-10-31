@@ -216,6 +216,7 @@ fn handle_tray_command(cmd_id: usize) {
             state.engine.reset();
             let config = state.config.clone();
             drop(state);
+            hook::record_current_app_mode(config.enabled);
             if let Some(tray) = TRAY_MANAGER.lock().unwrap().as_ref() {
                 tray.update_tray(&config);
             }

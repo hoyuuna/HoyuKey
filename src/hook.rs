@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
+use std::sync::Mutex;
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -12,10 +14,35 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-    PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, GUITHREADINFO, HHOOK, KBDLLHOOKSTRUCT,
-    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, GUITHREADINFO,
+    HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
+
+#[link(name = "user32")]
+extern "system" {
+    fn SetWinEventHook(
+        event_min: u32,
+        event_max: u32,
+        hmod_win_event_proc: *mut std::ffi::c_void,
+        pfn_win_event_proc: Option<
+            unsafe extern "system" fn(
+                h_win_event_hook: *mut std::ffi::c_void,
+                event: u32,
+                hwnd: HWND,
+                id_object: i32,
+                id_child: i32,
+                id_event_thread: u32,
+                dwms_event_time: u32,
+            ),
+        >,
+        id_process: u32,
+        id_thread: u32,
+        dw_flags: u32,
+    ) -> *mut std::ffi::c_void;
+
+    fn UnhookWinEvent(h_win_event_hook: *mut std::ffi::c_void) -> i32;
+}
 
 use crate::config::SwitchKey;
 use crate::engine::KeyAction;
@@ -26,6 +53,10 @@ pub const HOYU_MAGIC_EXTRA_INFO: usize = 0x484F5955; // 'HOYU'
 
 static KBD_HOOK_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
 static MOUSE_HOOK_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
+static WIN_EVENT_HOOK: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
+
+/// Bảng ghi nhớ trạng thái Tiếng Việt (E / V) theo từng tiến trình ứng dụng
+static APP_INPUT_STATES: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
 
 // Theo dõi các phím bị chặn KeyDown để chặn luôn KeyUp tương ứng, tránh desync phím khi gõ nhanh trên trình duyệt
 const INIT_BOOL: AtomicBool = AtomicBool::new(false);
@@ -54,11 +85,24 @@ pub fn install_hook() -> bool {
             0,
         );
 
+        let win_event = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            null_mut(),
+            Some(win_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        );
+
         if kbd_hook != null_mut() {
             KBD_HOOK_HANDLE.store(kbd_hook as _, Ordering::SeqCst);
         }
         if mouse_hook != null_mut() {
             MOUSE_HOOK_HANDLE.store(mouse_hook as _, Ordering::SeqCst);
+        }
+        if win_event != null_mut() {
+            WIN_EVENT_HOOK.store(win_event, Ordering::SeqCst);
         }
 
         kbd_hook != null_mut()
@@ -77,6 +121,144 @@ pub fn uninstall_hook() {
     if mouse != null_mut() {
         unsafe {
             UnhookWindowsHookEx(mouse);
+        }
+    }
+
+    let win_event = WIN_EVENT_HOOK.swap(null_mut(), Ordering::SeqCst);
+    if win_event != null_mut() {
+        unsafe {
+            UnhookWinEvent(win_event);
+        }
+    }
+}
+
+/// Callback WinEvent bắt sự kiện chuyển cửa sổ Foreground ngay lập tức khi Alt+Tab hoặc click chuột
+unsafe extern "system" fn win_event_proc(
+    _h_win_event_hook: *mut std::ffi::c_void,
+    event: u32,
+    hwnd: HWND,
+    _id_object: i32,
+    _id_child: i32,
+    _id_event_thread: u32,
+    _dwms_event_time: u32,
+) {
+    if event == EVENT_SYSTEM_FOREGROUND && !hwnd.is_null() {
+        on_focus_window_changed(hwnd);
+    }
+}
+
+/// Lấy tên file thực thi (.exe) từ HWND
+pub fn get_process_name_by_hwnd(hwnd: HWND) -> Option<String> {
+    if hwnd.is_null() {
+        return None;
+    }
+    unsafe {
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return None;
+        }
+
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+
+        let mut path_buf = [0u16; 1024];
+        let mut size = path_buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, 0, path_buf.as_mut_ptr(), &mut size);
+        CloseHandle(process);
+
+        if ok != 0 && size > 0 {
+            let full_path = String::from_utf16_lossy(&path_buf[..size as usize]);
+            let exe_name = std::path::Path::new(&full_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_ascii_lowercase());
+            return exe_name;
+        }
+    }
+    None
+}
+
+/// Xử lý khi cửa sổ làm việc thay đổi (chuyển app)
+pub fn on_focus_window_changed(new_hwnd: HWND) {
+    if new_hwnd.is_null() {
+        return;
+    }
+
+    let (remember_enabled, current_enabled, main_hwnd) = {
+        let state = match GLOBAL_STATE.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        (
+            state.config.remember_app_state,
+            state.config.enabled,
+            state.main_hwnd,
+        )
+    };
+
+    if !remember_enabled {
+        return;
+    }
+
+    let app_name = match get_process_name_by_hwnd(new_hwnd) {
+        Some(name) => name,
+        None => return,
+    };
+
+    // Bỏ qua chính cửa sổ HoyuKey dashboard
+    if app_name == "hoyukey.exe" {
+        return;
+    }
+
+    let mut map_lock = APP_INPUT_STATES.lock().unwrap();
+    let map = map_lock.get_or_insert_with(HashMap::new);
+
+    if let Some(&saved_mode) = map.get(&app_name) {
+        if saved_mode != current_enabled {
+            {
+                let mut state = GLOBAL_STATE.lock().unwrap();
+                state.config.enabled = saved_mode;
+                state.engine.reset();
+            }
+
+            if main_hwnd != 0 {
+                unsafe {
+                    PostMessageW(main_hwnd as HWND, WM_APP_UPDATE_TRAY, 0, 0);
+                }
+            }
+            crate::ui::notify_mode_changed(saved_mode);
+        }
+    } else {
+        // Lần đầu vào app này: ghi nhớ trạng thái hiện tại
+        map.insert(app_name, current_enabled);
+    }
+}
+
+/// Cập nhật trạng thái E / V mới cho ứng dụng đang active
+pub fn record_current_app_mode(new_enabled: bool) {
+    let remember_enabled = {
+        let state = match GLOBAL_STATE.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        state.config.remember_app_state
+    };
+
+    if !remember_enabled {
+        return;
+    }
+
+    unsafe {
+        let fg = GetForegroundWindow();
+        if let Some(app_name) = get_process_name_by_hwnd(fg) {
+            if app_name != "hoyukey.exe" {
+                let mut map_lock = APP_INPUT_STATES.lock().unwrap();
+                let map = map_lock.get_or_insert_with(HashMap::new);
+                map.insert(app_name, new_enabled);
+            }
         }
     }
 }
@@ -116,8 +298,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
     let current_fg = GetForegroundWindow() as isize;
     let prev_fg = LAST_FOREGROUND_WINDOW.swap(current_fg, Ordering::SeqCst);
     if prev_fg != 0 && prev_fg != current_fg {
-        let mut state = GLOBAL_STATE.lock().unwrap();
-        state.engine.on_window_change();
+        {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.engine.on_window_change();
+        }
+        on_focus_window_changed(current_fg as HWND);
     }
 
     let vk = kbd.vkCode as u16;
@@ -266,6 +451,9 @@ pub fn toggle_vietnamese_mode() {
         state.engine.reset();
         (state.main_hwnd, state.config.enabled)
     };
+
+    // Ghi nhớ trạng thái mới cho ứng dụng hiện tại nếu tính năng đang bật
+    record_current_app_mode(enabled);
 
     if hwnd != 0 {
         unsafe {

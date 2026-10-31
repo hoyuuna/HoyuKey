@@ -56,6 +56,7 @@ static AUTO_PERIOD_ENTER_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static BROWSER_COMPAT_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static BROWSER_INPUT_ANIM: AtomicU32 = AtomicU32::new(1000);
 static BROWSER_INPUT_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static REMEMBER_APP_PROGRESS: AtomicU32 = AtomicU32::new(0);
 
 // Quản lý trang và hiệu ứng chuyển trang (Smooth Page Transition Animation)
 static CURRENT_PAGE: AtomicU8 = AtomicU8::new(0);
@@ -259,6 +260,7 @@ pub fn show_settings_window() {
         BROWSER_COMPAT_PROGRESS.store(if state.config.browser_compatibility { 1000 } else { 0 }, Ordering::SeqCst);
         BROWSER_INPUT_ANIM.store(if state.config.browser_compatibility { 1000 } else { 0 }, Ordering::SeqCst);
         BROWSER_INPUT_FOCUSED.store(false, Ordering::SeqCst);
+        REMEMBER_APP_PROGRESS.store(if state.config.remember_app_state { 1000 } else { 0 }, Ordering::SeqCst);
         HOVER_ITEM.store(-1, Ordering::SeqCst);
         drop(state);
 
@@ -414,6 +416,7 @@ unsafe extern "system" fn settings_wnd_proc(
                 advance_anim(if config.auto_period_enter { 1000 } else { 0 }, &AUTO_PERIOD_ENTER_PROGRESS);
                 advance_anim(if config.browser_compatibility { 1000 } else { 0 }, &BROWSER_COMPAT_PROGRESS);
                 advance_anim(if config.browser_compatibility { 1000 } else { 0 }, &BROWSER_INPUT_ANIM);
+                advance_anim(if config.remember_app_state { 1000 } else { 0 }, &REMEMBER_APP_PROGRESS);
 
                 // 3. Easing cuộn nội dung mượt mà 60 FPS
                 let curr_scroll = SCROLL_Y.load(Ordering::SeqCst);
@@ -700,6 +703,14 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
                     return 72;
                 }
             }
+
+            let anim_p = BROWSER_INPUT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
+            let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
+            let card1_h = (68.0 + 64.0 * anim_ease).round() as i32;
+            let card2_y = 86 + card1_h + 14;
+            if x >= right_ctrl - 52 && x <= right_ctrl && y >= card2_y + 10 && y <= card2_y + 54 {
+                return 73;
+            }
         }
     }
 
@@ -897,6 +908,15 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             // Hỗ trợ Tương thích trình duyệt trong Nâng cao
             if x >= right_ctrl - 52 && x <= right_ctrl && y >= 96 && y <= 140 {
                 state.config.browser_compatibility = !state.config.browser_compatibility;
+                changed = true;
+            }
+
+            let anim_p = BROWSER_INPUT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
+            let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
+            let card1_h = (68.0 + 64.0 * anim_ease).round() as i32;
+            let card2_y = 86 + card1_h + 14;
+            if x >= right_ctrl - 52 && x <= right_ctrl && y >= card2_y + 10 && y <= card2_y + 54 {
+                state.config.remember_app_state = !state.config.remember_app_state;
                 changed = true;
             }
 
@@ -1672,6 +1692,16 @@ unsafe fn render_page_elements(
                 let text_color = (alpha_u8 << 24) | (ARGB_TEXT_PRIMARY & 0x00FFFFFF);
                 draw_gdip_text_centered(graphics, font_desc, &display_text, left_text + 8, box_y, box_w - 16, box_h, text_color);
             }
+
+            // 2. Ghi nhớ trạng thái theo ứng dụng
+            let card2_y = 86 + card_h + 14;
+            let card2_h = 68;
+            gdiplus_draw_rounded_card(graphics, card_x, card2_y, card_w, card2_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+
+            draw_gdip_text(graphics, font_bold, "Ghi nhớ trạng thái theo ứng dụng", left_text, card2_y + 12, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Tự động khôi phục chế độ E / V riêng cho từng cửa sổ ứng dụng", left_text, card2_y + 36, ARGB_TEXT_MUTED, false);
+            let remember_p = REMEMBER_APP_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, card2_y + 18, remember_p);
         }
     }
 }

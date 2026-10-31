@@ -40,6 +40,8 @@ pub struct Config {
     pub browser_compatibility: bool,
     /// Danh sách tiến trình ứng dụng cần tương thích trình duyệt
     pub browser_apps: String,
+    /// Ghi nhớ trạng thái E / V riêng cho từng ứng dụng khi chuyển cửa sổ
+    pub remember_app_state: bool,
 }
 
 impl Default for Config {
@@ -59,6 +61,7 @@ impl Default for Config {
             auto_period_enter: false,
             browser_compatibility: true,
             browser_apps: "chrome.exe, msedge.exe, brave.exe, coccoc.exe, opera.exe".to_string(),
+            remember_app_state: false,
         }
     }
 }
@@ -146,7 +149,7 @@ impl Config {
     pub fn to_json_string(&self) -> String {
         let escaped_browser_apps = self.browser_apps.replace('\\', "\\\\").replace('"', "\\\"");
         format!(
-            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\"\n}}\n",
+            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {}\n}}\n",
             self.enabled,
             match self.input_method {
                 InputMethod::Telex => "Telex",
@@ -167,6 +170,7 @@ impl Config {
             self.auto_period_enter,
             self.browser_compatibility,
             escaped_browser_apps,
+            self.remember_app_state,
         )
     }
 
@@ -199,6 +203,7 @@ impl Config {
                 "auto_period_enter" => self.auto_period_enter = val == "true",
                 "browser_compatibility" => self.browser_compatibility = val == "true",
                 "browser_apps" => self.browser_apps = val,
+                "remember_app_state" => self.remember_app_state = val == "true",
                 // Tương thích ngược: Bỏ qua các trường lạ/chưa hỗ trợ mà không làm hỏng cấu hình
                 _ => {}
             }
@@ -302,6 +307,18 @@ mod tests {
         assert_eq!(config.browser_compatibility, true);
         assert!(config.browser_apps.contains("chrome.exe"));
         assert_eq!(config.smart_english, true);
+        assert_eq!(config.remember_app_state, false);
+    }
+
+    #[test]
+    fn test_remember_app_state_parsing() {
+        let json_with_remember = r#"{"remember_app_state": true}"#;
+        let mut config = Config::default();
+        config.merge_from_json(json_with_remember);
+        assert_eq!(config.remember_app_state, true);
+
+        let serialized = config.to_json_string();
+        assert!(serialized.contains("\"remember_app_state\": true"));
     }
 
     #[test]
