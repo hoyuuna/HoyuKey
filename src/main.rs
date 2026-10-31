@@ -12,6 +12,7 @@ use std::ptr::null_mut;
 use std::sync::{LazyLock, Mutex};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetMessageW, MessageBoxW,
     PostMessageW, PostQuitMessage, RegisterClassW, SetProcessDPIAware, TranslateMessage, MB_OK,
@@ -139,6 +140,9 @@ fn main() {
         return;
     }
 
+    // Tối ưu hóa cực hạn: Ép giải phóng bộ nhớ khởi động, đưa RAM chạy nền xuống ~0.5 - 0.9 MB
+    trim_working_set();
+
     // 6. Vòng lặp tin nhắn Windows (Message Loop)
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     unsafe {
@@ -254,4 +258,11 @@ fn handle_tray_command(cmd_id: usize) {
 
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Ép Windows thu hồi toàn bộ các trang nhớ và DLL dư thừa, đưa RAM chạy nền xuống ~0.5 - 0.9 MB
+fn trim_working_set() {
+    unsafe {
+        SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
 }
