@@ -44,6 +44,12 @@ pub static GLOBAL_STATE: LazyLock<Mutex<AppState>> = LazyLock::new(|| {
 
 pub static TRAY_MANAGER: LazyLock<Mutex<Option<TrayManager>>> = LazyLock::new(|| Mutex::new(None));
 
+pub fn show_notification(title: &str, message: &str) {
+    if let Some(tray) = TRAY_MANAGER.lock().unwrap().as_ref() {
+        tray.show_balloon_notification(title, message);
+    }
+}
+
 fn main() {
     // 0. Bật DPI-Awareness toàn diện (Per-Monitor V2) để giao diện hiển thị siêu sắc nét
     unsafe {
@@ -144,6 +150,14 @@ fn main() {
     {
         let config = GLOBAL_STATE.lock().unwrap().config.clone();
         apply_ram_limiter(&config);
+    }
+
+    let should_notify_startup = {
+        let state = GLOBAL_STATE.lock().unwrap();
+        state.config.notify_on_startup
+    };
+    if should_notify_startup {
+        show_notification("HoyuKey", "HoyuKey đã kích hoạt và sẵn sàng!");
     }
 
     // 6. Vòng lặp tin nhắn Windows (Message Loop)

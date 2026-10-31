@@ -50,6 +50,8 @@ const V_BGRA_32: &[u8] = include_bytes!("../icon/v_32.bin");
 const E_BGRA_32: &[u8] = include_bytes!("../icon/e_32.bin");
 
 static START_WITH_WINDOWS_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static NOTIFY_STARTUP_PROGRESS: AtomicU32 = AtomicU32::new(1000);
+static NOTIFY_TOGGLE_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static MODE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static AUTO_CAPS_LINE_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static AUTO_CAPS_SENTENCE_PROGRESS: AtomicU32 = AtomicU32::new(0);
@@ -282,6 +284,8 @@ pub fn show_settings_window() {
         INPUT_METHOD_PROGRESS.store(if state.config.input_method == InputMethod::Vni { 1000 } else { 0 }, Ordering::SeqCst);
         SWITCH_KEY_PROGRESS.store(if state.config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, Ordering::SeqCst);
         START_WITH_WINDOWS_PROGRESS.store(if state.config.start_with_windows { 1000 } else { 0 }, Ordering::SeqCst);
+        NOTIFY_STARTUP_PROGRESS.store(if state.config.notify_on_startup { 1000 } else { 0 }, Ordering::SeqCst);
+        NOTIFY_TOGGLE_PROGRESS.store(if state.config.notify_on_toggle { 1000 } else { 0 }, Ordering::SeqCst);
         MODE_PROGRESS.store(if state.config.enabled { 1000 } else { 0 }, Ordering::SeqCst);
         AUTO_CAPS_LINE_PROGRESS.store(if state.config.auto_caps_line { 1000 } else { 0 }, Ordering::SeqCst);
         AUTO_CAPS_SENTENCE_PROGRESS.store(if state.config.auto_caps_sentence { 1000 } else { 0 }, Ordering::SeqCst);
@@ -448,6 +452,8 @@ unsafe extern "system" fn settings_wnd_proc(
                 advance_anim(if config.input_method == InputMethod::Vni { 1000 } else { 0 }, &INPUT_METHOD_PROGRESS);
                 advance_anim(if config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, &SWITCH_KEY_PROGRESS);
                 advance_anim(if config.start_with_windows { 1000 } else { 0 }, &START_WITH_WINDOWS_PROGRESS);
+                advance_anim(if config.notify_on_startup { 1000 } else { 0 }, &NOTIFY_STARTUP_PROGRESS);
+                advance_anim(if config.notify_on_toggle { 1000 } else { 0 }, &NOTIFY_TOGGLE_PROGRESS);
                 advance_anim(if config.auto_caps_line { 1000 } else { 0 }, &AUTO_CAPS_LINE_PROGRESS);
                 advance_anim(if config.auto_caps_sentence { 1000 } else { 0 }, &AUTO_CAPS_SENTENCE_PROGRESS);
                 advance_anim(if config.auto_period_enter { 1000 } else { 0 }, &AUTO_PERIOD_ENTER_PROGRESS);
@@ -704,15 +710,23 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             if x >= sw_tab_x && x <= sw_tab_x + sw_total_w && y >= 152 && y <= 196 {
                 return 46;
             }
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 238 && y <= 282 {
-                return 47;
-            }
-            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 332 && y <= 376 {
-                return 48;
+            if x >= right_ctrl - 52 && x <= right_ctrl {
+                if y >= 234 && y <= 274 {
+                    return 47;
+                }
+                if y >= 346 && y <= 386 {
+                    return 49; // Thông báo khởi động
+                }
+                if y >= 418 && y <= 458 {
+                    return 50; // Thông báo chuyển ngôn ngữ
+                }
+                if y >= 498 && y <= 538 {
+                    return 48; // Điều chỉnh RAM chạy nền
+                }
             }
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst);
             if anim_p > 200 {
-                let pill_y = 428;
+                let pill_y = 598;
                 let pill_h = 34;
                 if y >= pill_y && y <= pill_y + pill_h {
                     let total_w = card_w - 40;
@@ -930,19 +944,25 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                         changed = true;
                     }
                 }
-            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 238 && y <= 282 {
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 234 && y <= 274 {
                 let new_val = !state.config.start_with_windows;
                 state.config.start_with_windows = new_val;
                 crate::autostart::set_autostart(new_val);
                 changed = true;
-            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 332 && y <= 376 {
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 346 && y <= 386 {
+                state.config.notify_on_startup = !state.config.notify_on_startup;
+                changed = true;
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 418 && y <= 458 {
+                state.config.notify_on_toggle = !state.config.notify_on_toggle;
+                changed = true;
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 498 && y <= 538 {
                 state.config.limit_ram = !state.config.limit_ram;
                 crate::apply_ram_limiter(&state.config);
                 changed = true;
             } else {
                 let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst);
                 if anim_p > 200 {
-                    let pill_y = 428;
+                    let pill_y = 598;
                     let pill_h = 34;
                     if y >= pill_y && y <= pill_y + pill_h {
                         let total_w = card_w - 40;
@@ -1633,18 +1653,38 @@ unsafe fn render_page_elements(
                 font_tab,
             );
 
-            // Card 2: Khởi động cùng Windows (cao 84px, y = 222..306)
-            gdiplus_draw_rounded_card(graphics, card_x, 222, card_w, 84, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
-            draw_gdip_text(graphics, font_bold, "Khởi động cùng Windows", left_text, 239, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Tự động chạy HoyuKey khi đăng nhập máy tính", left_text, 265, ARGB_TEXT_MUTED, false);
+            // Card 2: Khởi động cùng Windows (cao 76px, y = 220..296)
+            gdiplus_draw_rounded_card(graphics, card_x, 220, card_w, 76, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            draw_gdip_text(graphics, font_bold, "Khởi động cùng Windows", left_text, 234, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Tự động chạy HoyuKey khi đăng nhập máy tính", left_text, 258, ARGB_TEXT_MUTED, false);
             let autostart_progress = START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-            draw_animated_switch(graphics, right_ctrl - 50, 246, autostart_progress);
+            draw_animated_switch(graphics, right_ctrl - 50, 241, autostart_progress);
 
-            // Card 3: Điều chỉnh RAM chạy nền (Memory Limiter - vừa vặn hoàn hảo, không còn note thừa)
+            // Mục nhỏ "THÔNG BÁO" (như chữ CÀI ĐẶT ở màn hình chính)
+            draw_gdip_text(graphics, font_section, "THÔNG BÁO", card_x + 4, 310, ARGB_STATUS_MUTED, false);
+
+            // Card Thông báo: 2 tùy chọn (cao 144px, y = 332..476)
+            gdiplus_draw_rounded_card(graphics, card_x, 332, card_w, 144, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+
+            // 1. Thông báo khởi động
+            draw_gdip_text(graphics, font_bold, "Thông báo khi khởi động", left_text, 346, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "HoyuKey đã kích hoạt và sẵn sàng!", left_text, 370, ARGB_TEXT_MUTED, false);
+            let notify_startup_p = NOTIFY_STARTUP_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, 353, notify_startup_p);
+
+            gdiplus_draw_line(graphics, left_text, 404, right_ctrl, 404, ARGB_DIVIDER, 1.0);
+
+            // 2. Thông báo chuyển ngôn ngữ
+            draw_gdip_text(graphics, font_bold, "Thông báo chuyển ngôn ngữ", left_text, 418, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Hiện thông báo mỗi khi bật hoặc tắt Tiếng Việt", left_text, 442, ARGB_TEXT_MUTED, false);
+            let notify_toggle_p = NOTIFY_TOGGLE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, 425, notify_toggle_p);
+
+            // Card 3: Điều chỉnh RAM chạy nền (Memory Limiter - y = 488..)
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
             let card3_h = (70.0 + 82.0 * anim_ease).round() as i32;
-            let card3_y = 318;
+            let card3_y = 488;
             gdiplus_draw_rounded_card(graphics, card_x, card3_y, card_w, card3_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             draw_gdip_text(graphics, font_bold, "Điều chỉnh RAM chạy nền", left_text, card3_y + 14, ARGB_TEXT_PRIMARY, false);

@@ -46,6 +46,10 @@ pub struct Config {
     pub limit_ram: bool,
     /// Mức RAM tối đa (MB) khi chạy nền (mốc an toàn tối thiểu 1 MB, mặc định 2 MB)
     pub max_ram_mb: u32,
+    /// Thông báo khởi động (mặc định true: "HoyuKey đã kích hoạt và sẵn sàng!")
+    pub notify_on_startup: bool,
+    /// Thông báo chuyển ngôn ngữ (mặc định false: "Đã bật/tắt Tiếng Việt")
+    pub notify_on_toggle: bool,
 }
 
 impl Default for Config {
@@ -68,6 +72,8 @@ impl Default for Config {
             remember_app_state: false,
             limit_ram: false,
             max_ram_mb: 1,
+            notify_on_startup: true,
+            notify_on_toggle: false,
         }
     }
 }
@@ -155,7 +161,7 @@ impl Config {
     pub fn to_json_string(&self) -> String {
         let escaped_browser_apps = self.browser_apps.replace('\\', "\\\\").replace('"', "\\\"");
         format!(
-            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {},\n  \"limit_ram\": {},\n  \"max_ram_mb\": {}\n}}\n",
+            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {},\n  \"limit_ram\": {},\n  \"max_ram_mb\": {},\n  \"notify_on_startup\": {},\n  \"notify_on_toggle\": {}\n}}\n",
             self.enabled,
             match self.input_method {
                 InputMethod::Telex => "Telex",
@@ -179,6 +185,8 @@ impl Config {
             self.remember_app_state,
             self.limit_ram,
             self.max_ram_mb,
+            self.notify_on_startup,
+            self.notify_on_toggle,
         )
     }
 
@@ -218,6 +226,8 @@ impl Config {
                         self.max_ram_mb = v.clamp(0, 16);
                     }
                 }
+                "notify_on_startup" => self.notify_on_startup = val == "true",
+                "notify_on_toggle" => self.notify_on_toggle = val == "true",
                 // Tương thích ngược: Bỏ qua các trường lạ/chưa hỗ trợ mà không làm hỏng cấu hình
                 _ => {}
             }
@@ -249,46 +259,42 @@ fn parse_json_key_values(json: &str) -> Vec<(String, String)> {
                 i += 1;
             }
 
-            while i < n && chars[i] != ':' && chars[i] != '}' {
+            while i < n && (chars[i].is_whitespace() || chars[i] == ':') {
                 i += 1;
             }
 
-            if i < n && chars[i] == ':' {
+            if i >= n {
+                break;
+            }
+
+            let mut val = String::new();
+            if chars[i] == '"' {
                 i += 1;
-                while i < n && chars[i].is_whitespace() {
-                    i += 1;
-                }
-                if i < n {
-                    if chars[i] == '"' {
-                        i += 1;
-                        let mut val = String::new();
-                        while i < n && chars[i] != '"' {
-                            if chars[i] == '\\' && i + 1 < n {
-                                val.push(chars[i + 1]);
-                                i += 2;
-                            } else {
-                                val.push(chars[i]);
-                                i += 1;
-                            }
-                        }
-                        if i < n && chars[i] == '"' {
-                            i += 1;
-                        }
-                        results.push((key, val));
+                while i < n && chars[i] != '"' {
+                    if chars[i] == '\\' && i + 1 < n {
+                        val.push(chars[i + 1]);
+                        i += 2;
                     } else {
-                        let mut val = String::new();
-                        while i < n && chars[i] != ',' && chars[i] != '}' && !chars[i].is_whitespace() {
-                            val.push(chars[i]);
-                            i += 1;
-                        }
-                        results.push((key, val));
+                        val.push(chars[i]);
+                        i += 1;
                     }
                 }
+                if i < n && chars[i] == '"' {
+                    i += 1;
+                }
+            } else {
+                while i < n && chars[i] != ',' && chars[i] != '}' && !chars[i].is_whitespace() {
+                    val.push(chars[i]);
+                    i += 1;
+                }
             }
+
+            results.push((key, val));
         } else {
             i += 1;
         }
     }
+
     results
 }
 
@@ -324,6 +330,8 @@ mod tests {
         assert_eq!(config.remember_app_state, false);
         assert_eq!(config.limit_ram, false);
         assert_eq!(config.max_ram_mb, 1);
+        assert_eq!(config.notify_on_startup, true);
+        assert_eq!(config.notify_on_toggle, false);
     }
 
     #[test]

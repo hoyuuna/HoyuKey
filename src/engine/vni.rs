@@ -146,7 +146,57 @@ fn handle_vni_horn(word: &str, free_marking: bool) -> Option<String> {
         return None;
     }
 
-    // 1. Kiểm tra cặp 'uo' -> 'ươ' trong toàn từ
+    // 1. Kiểm tra cặp 'ua' -> 'ưa' trong toàn từ (ngoại trừ sau 'q')
+    let mut found_ua = None;
+    let mut found_ua_already_horned = None;
+    for i in 0..chars.len().saturating_sub(1) {
+        if i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
+            continue;
+        }
+        let c1 = chars[i].to_ascii_lowercase();
+        let c2 = chars[i + 1].to_ascii_lowercase();
+        if c1 == 'ư' && c2 == 'a' {
+            found_ua_already_horned = Some(i);
+            break;
+        }
+        if c1 == 'u' && c2 == 'a' {
+            found_ua = Some(i);
+            break;
+        }
+    }
+
+    if let Some(i) = found_ua_already_horned {
+        let mut new_chars = chars.clone();
+        let (_, _, t1, u1) = decompose_vietnamese_char(new_chars[i]).unwrap_or(('u', VowelMod::Horn, Tone::None, false));
+        let (_, _, t2, u2) = decompose_vietnamese_char(new_chars[i + 1]).unwrap_or(('a', VowelMod::None, Tone::None, false));
+
+        let restored_u = get_vietnamese_vowel('u', VowelMod::None, t1).unwrap_or('u');
+        let restored_u = if u1 { restored_u.to_uppercase().next().unwrap_or(restored_u) } else { restored_u };
+        let restored_a = get_vietnamese_vowel('a', VowelMod::None, t2).unwrap_or('a');
+        let restored_a = if u2 { restored_a.to_uppercase().next().unwrap_or(restored_a) } else { restored_a };
+
+        new_chars[i] = restored_u;
+        new_chars[i + 1] = restored_a;
+        new_chars.push('7');
+        return Some(new_chars.into_iter().collect());
+    }
+
+    if let Some(i) = found_ua {
+        let mut new_chars = chars.clone();
+        let (_, _, t1, u1) = decompose_vietnamese_char(new_chars[i]).unwrap_or(('u', VowelMod::None, Tone::None, false));
+        let (_, _, t2, u2) = decompose_vietnamese_char(new_chars[i + 1]).unwrap_or(('a', VowelMod::None, Tone::None, false));
+
+        let new_u = get_vietnamese_vowel('u', VowelMod::Horn, t1).unwrap_or('ư');
+        let new_u = if u1 { new_u.to_uppercase().next().unwrap_or(new_u) } else { new_u };
+        let new_a = get_vietnamese_vowel('a', VowelMod::None, t2).unwrap_or('a');
+        let new_a = if u2 { new_a.to_uppercase().next().unwrap_or(new_a) } else { new_a };
+
+        new_chars[i] = new_u;
+        new_chars[i + 1] = new_a;
+        return Some(new_chars.into_iter().collect());
+    }
+
+    // 2. Kiểm tra cặp 'uo' -> 'ươ' trong toàn từ
     let mut found_uo = None;
     let mut found_uo_already_horned = None;
     for i in 0..chars.len().saturating_sub(1) {

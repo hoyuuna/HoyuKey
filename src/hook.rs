@@ -66,8 +66,9 @@ static BLOCKED_VK: [AtomicBool; 256] = [INIT_BOOL; 256];
 static LAST_FOREGROUND_WINDOW: AtomicIsize = AtomicIsize::new(0);
 
 // Theo dõi trạng thái phím tắt Ctrl + Shift (chuyển chế độ khi nhả phím)
-static CTRL_SHIFT_ACTIVE: AtomicBool = AtomicBool::new(false);
-static CTRL_SHIFT_DIRTY: AtomicBool = AtomicBool::new(false);
+static CTRL_IS_DOWN: AtomicBool = AtomicBool::new(false);
+static SHIFT_IS_DOWN: AtomicBool = AtomicBool::new(false);
+static CTRL_SHIFT_READY: AtomicBool = AtomicBool::new(false);
 
 pub fn install_hook() -> bool {
     unsafe {
@@ -322,9 +323,15 @@ unsafe extern "system" fn low_level_keyboard_proc(
     // 3. Xử lý nhả phím (KeyUp):
     if is_up {
         // Nếu dùng phím tắt Ctrl + Shift: chuyển chế độ khi người dùng nhả phím (chuẩn Windows)
-        if switch_key == SwitchKey::CtrlShift && (is_ctrl_key || is_shift_key) {
-            if CTRL_SHIFT_ACTIVE.swap(false, Ordering::SeqCst) {
-                if !CTRL_SHIFT_DIRTY.swap(false, Ordering::SeqCst) {
+        if switch_key == SwitchKey::CtrlShift {
+            if is_ctrl_key {
+                CTRL_IS_DOWN.store(false, Ordering::SeqCst);
+                if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) {
+                    toggle_vietnamese_mode();
+                }
+            } else if is_shift_key {
+                SHIFT_IS_DOWN.store(false, Ordering::SeqCst);
+                if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) {
                     toggle_vietnamese_mode();
                 }
             }
@@ -344,17 +351,19 @@ unsafe extern "system" fn low_level_keyboard_proc(
     // 4. Kiểm tra phím tắt chuyển đổi chế độ V / E
     match switch_key {
         SwitchKey::CtrlShift => {
-            if is_ctrl_key || is_shift_key {
-                let ctrl_down = (GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
-                let shift_down = (GetAsyncKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0;
-                if ctrl_down && shift_down {
-                    CTRL_SHIFT_ACTIVE.store(true, Ordering::SeqCst);
-                    CTRL_SHIFT_DIRTY.store(false, Ordering::SeqCst);
+            if is_ctrl_key {
+                CTRL_IS_DOWN.store(true, Ordering::SeqCst);
+                if SHIFT_IS_DOWN.load(Ordering::SeqCst) {
+                    CTRL_SHIFT_READY.store(true, Ordering::SeqCst);
+                }
+            } else if is_shift_key {
+                SHIFT_IS_DOWN.store(true, Ordering::SeqCst);
+                if CTRL_IS_DOWN.load(Ordering::SeqCst) {
+                    CTRL_SHIFT_READY.store(true, Ordering::SeqCst);
                 }
             } else {
-                // Người dùng bấm phím thứ 3 trong lúc giữ Ctrl+Shift (ví dụ Ctrl+Shift+S) -> hủy chuyển chế độ
-                CTRL_SHIFT_DIRTY.store(true, Ordering::SeqCst);
-                CTRL_SHIFT_ACTIVE.store(false, Ordering::SeqCst);
+                // Phím thứ 3 được nhấn -> hủy chuyển chế độ
+                CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
             }
         }
         SwitchKey::AltZ => {
@@ -444,12 +453,12 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
 
 pub fn toggle_vietnamese_mode() {
-    let (hwnd, enabled) = {
+    let (hwnd, enabled, notify_toggle) = {
         let mut state = GLOBAL_STATE.lock().unwrap();
         state.config.enabled = !state.config.enabled;
         state.config.save();
         state.engine.reset();
-        (state.main_hwnd, state.config.enabled)
+        (state.main_hwnd, state.config.enabled, state.config.notify_on_toggle)
     };
 
     // Ghi nhớ trạng thái mới cho ứng dụng hiện tại nếu tính năng đang bật
@@ -459,6 +468,15 @@ pub fn toggle_vietnamese_mode() {
         unsafe {
             PostMessageW(hwnd as HWND, WM_APP_UPDATE_TRAY, 0, 0);
         }
+    }
+
+    if notify_toggle {
+        let msg = if enabled {
+            "Đã bật Tiếng Việt"
+        } else {
+            "Đã tắt Tiếng Việt"
+        };
+        crate::show_notification("HoyuKey", msg);
     }
 
     crate::ui::notify_mode_changed(enabled);

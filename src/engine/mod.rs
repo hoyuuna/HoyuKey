@@ -1160,4 +1160,30 @@ mod tests {
         let res_caps = simulate_type(&mut engine, &config, input_caps);
         assert_eq!(res_caps, "DEVELOPER DEBUG POSTGREST TAILWIND CSS SUPABASE");
     }
+
+    #[test]
+    fn test_user_requested_cuawr_to_cua() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // cuawr -> cửa
+        let res = simulate_type(&mut engine, &config, "cuawr");
+        assert_eq!(res, "cửa");
+
+        // muaw -> mưa
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "muaw"), "mưa");
+
+        // chuaw -> chưa
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "chuaw"), "chưa");
+
+        // quawst -> quắt (không bị biến thành quắt/quưa)
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "quawst"), "quắt");
+
+        // cuaww -> cuaw (undo)
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "cuaww"), "cuaw");
+    }
 }

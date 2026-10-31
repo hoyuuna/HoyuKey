@@ -101,6 +101,28 @@ impl TrayManager {
         }
     }
 
+    pub fn show_balloon_notification(&self, title: &str, message: &str) {
+        let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
+        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd = self.hwnd;
+        nid.uID = 1;
+        nid.uFlags = 0x00000010; // NIF_INFO
+
+        let wide_title = to_wide_chars(title);
+        let copy_title_len = wide_title.len().min(nid.szInfoTitle.len() - 1);
+        nid.szInfoTitle[..copy_title_len].copy_from_slice(&wide_title[..copy_title_len]);
+
+        let wide_msg = to_wide_chars(message);
+        let copy_msg_len = wide_msg.len().min(nid.szInfo.len() - 1);
+        nid.szInfo[..copy_msg_len].copy_from_slice(&wide_msg[..copy_msg_len]);
+
+        nid.dwInfoFlags = 0x00000001; // NIIF_INFO
+
+        unsafe {
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
+    }
+
     pub fn remove_from_tray(&self) {
         let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
