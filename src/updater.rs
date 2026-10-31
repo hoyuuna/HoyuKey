@@ -372,7 +372,7 @@ extern "system" {
 fn download_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
     let _ = std::fs::remove_file(dest);
 
-    // Cách 1: Ưu tiên curl.exe có sẵn trên Windows 10/11 (chạy ngầm tuyệt đối không nháy console window)
+    // Cách 1: Ưu tiên curl.exe có sẵn trên Windows 10/11
     let mut cmd = std::process::Command::new("curl.exe");
     cmd.args([
         "-L", // Follow redirects (GitHub -> Azure CDN)
@@ -400,38 +400,7 @@ fn download_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
         }
     }
 
-    // Cách 2: Dự phòng qua PowerShell ngầm (TLS 1.2 WebClient)
-    let ps_script = format!(
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('{}', '{}')",
-        url,
-        dest.to_string_lossy().replace('\'', "''")
-    );
-    let mut ps_cmd = std::process::Command::new("powershell.exe");
-    ps_cmd.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-WindowStyle",
-        "Hidden",
-        "-Command",
-        &ps_script,
-    ]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        ps_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-
-    if let Ok(st) = ps_cmd.status() {
-        if st.success() {
-            if let Ok(meta) = std::fs::metadata(dest) {
-                if meta.len() > 100_000 {
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    // Cách 3: Dự phòng URLDownloadToFileW từ urlmon.dll
+    // Cách 2: Dự phòng URLDownloadToFileW từ urlmon.dll
     let wide_url = to_wide(url);
     let wide_dest = to_wide(&dest.to_string_lossy());
     let hr = unsafe {
@@ -452,7 +421,7 @@ fn download_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
         }
     }
 
-    // Cách 4: Dự phòng cuối cùng bằng WinInet http_get
+    // Cách 3: Dự phòng cuối cùng bằng WinInet http_get
     let data = http_get(url)?;
     if data.len() < 100_000 {
         return Err("File tải về bị lỗi kích thước".to_string());
@@ -471,47 +440,43 @@ fn perform_update(hwnd: HWND, download_url: &str) {
             return;
         }
     };
+    let current_dir = match current_exe.parent() {
+        Some(d) => d.to_path_buf(),
+        None => {
+            MODAL_STATE.store(5, Ordering::SeqCst);
+            unsafe { InvalidateRect(hwnd, null_mut(), 0); }
+            return;
+        }
+    };
 
-    // Luôn tải vào thư mục Temp để tránh lỗi phân quyền (kể cả khi app đặt ở C:\ hoặc Program Files)
-    let temp_dir = std::env::temp_dir();
-    let update_exe = temp_dir.join("HoyuKey_new.exe");
-    let bat_file = temp_dir.join("update_hoyukey.bat");
+    let update_exe = current_dir.join("HoyuKey_new.exe");
+    let bat_file = current_dir.join("update_hoyukey.bat");
 
     let _ = std::fs::remove_file(&update_exe);
     let _ = std::fs::remove_file(&bat_file);
 
-    // 1. Tải file mới vào Temp
+    // 1. Tải file mới vào cùng thư mục app
     if let Err(_) = download_file(download_url, &update_exe) {
         MODAL_STATE.store(5, Ordering::SeqCst);
         unsafe { InvalidateRect(hwnd, null_mut(), 0); }
         return;
     }
 
-    // 2. Tạo script cập nhật tự động trong Temp
-    let src_str = update_exe.to_string_lossy();
-    let dst_str = current_exe.to_string_lossy();
-
+    // 2. Tạo script cập nhật tự động (chuẩn mực, lành tính, không dùng các lệnh lạ)
+    let exe_name = current_exe.file_name().unwrap_or_default().to_string_lossy();
     let bat_content = format!(
         "@echo off\r\n\
-setlocal\r\n\
 chcp 65001 >nul\r\n\
-set \"SRC={}\"\r\n\
-set \"DST={}\"\r\n\
 timeout /t 1 /nobreak >nul\r\n\
 :retry\r\n\
-move /y \"%SRC%\" \"%DST%\" >nul 2>&1\r\n\
-if not exist \"%SRC%\" goto launch\r\n\
-timeout /t 1 /nobreak >nul\r\n\
-move /y \"%SRC%\" \"%DST%\" >nul 2>&1\r\n\
-if not exist \"%SRC%\" goto launch\r\n\
-rem Nếu chưa ghi đè được (ví dụ do HoyuKey đặt ở C:\\ hoặc Program Files cần quyền Admin)\r\n\
-powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command \"Start-Process cmd -ArgumentList '/c timeout /t 1 /nobreak >nul & move /y \\\"\\\"%SRC%\\\"\\\" \\\"\\\"%DST%\\\"\\\" & start \\\"\\\" \\\"\\\"%DST%\\\"\\\"' -Verb RunAs -WindowStyle Hidden\"\r\n\
-goto cleanup\r\n\
-:launch\r\n\
-start \"\" \"%DST%\"\r\n\
-:cleanup\r\n\
+move /y \"HoyuKey_new.exe\" \"{}\" >nul 2>&1\r\n\
+if exist \"HoyuKey_new.exe\" (\r\n\
+    timeout /t 1 /nobreak >nul\r\n\
+    goto retry\r\n\
+)\r\n\
+start \"\" \"{}\"\r\n\
 del \"%~f0\" >nul 2>&1\r\n",
-        src_str, dst_str
+        exe_name, exe_name
     );
 
     if let Err(_) = std::fs::write(&bat_file, bat_content) {
