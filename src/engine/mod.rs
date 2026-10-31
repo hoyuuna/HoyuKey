@@ -140,7 +140,6 @@ impl Engine {
         // Kết thúc cụm từ hoàn toàn, reset sạch buffer để không bao giờ bị nhảy nhầm chữ ("luôn, " không bị thành "luoon")
         if is_word_boundary(c) {
             self.last_char_typed = Some(c);
-            self.has_space_before = true;
             if matches!(c, '.' | '?' | '!') {
                 self.saw_sentence_end_punct = true;
                 self.after_sentence_end = false;
@@ -149,6 +148,7 @@ impl Engine {
                 self.after_sentence_end = false;
             }
             self.reset();
+            self.has_space_before = true;
             return KeyAction::PassThrough;
         }
 
@@ -273,7 +273,8 @@ impl Engine {
                             if config.auto_restore && !is_valid_vietnamese_syllable(&self.current_word) {
                                 let bs = backspaces;
                                 let text = self.raw_keys.clone();
-                                self.reset();
+                                self.current_word = text.clone();
+                                self.has_transformed = false;
                                 return KeyAction::Transform {
                                     backspaces: bs,
                                     text,
@@ -304,7 +305,8 @@ impl Engine {
             if !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&test_word) {
                 let backspaces = self.current_word.chars().count();
                 let text = self.raw_keys.clone();
-                self.reset();
+                self.current_word = text.clone();
+                self.has_transformed = false;
                 return KeyAction::Transform {
                     backspaces,
                     text,
@@ -1109,7 +1111,7 @@ mod tests {
         config_modern.modern_tone = true;
 
         // Chuẩn mới (hoà, thuỷ - dấu đặt trên nguyên âm thứ 2: a, y):
-        let input = "Hoaf binhf duowis cown muwa thuyr tinh lamf buwngf sangs car gocs troeif thuowr aays.";
+        let input = "Hoaf binhf duowis cown muwa thuyr tinh lamf buwngf sangs car gocs trowif thuowr aays.";
         let res_modern = simulate_type(&mut engine, &config_modern, input);
         assert_eq!(
             res_modern,
@@ -1129,7 +1131,7 @@ mod tests {
 
         // CapsLock chuẩn mới:
         engine.reset();
-        let input_caps = "HOAF BINHF DUOWIS COWN MUWA THUYR TINH LAMF BUWNGF SANGS CAR GOCS TROEIF THUOWR AAYS.";
+        let input_caps = "HOAF BINHF DUOWIS COWN MUWA THUYR TINH LAMF BUWNGF SANGS CAR GOCS TROWIF THUOWR AAYS.";
         let res_caps = simulate_type(&mut engine, &config_modern, input_caps);
         assert_eq!(
             res_caps,

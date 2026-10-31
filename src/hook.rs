@@ -13,8 +13,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-    PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, GUITHREADINFO,
+    CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId,
+    PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND,
     HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_KEYDOWN,
     WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
@@ -513,82 +513,7 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
     }
 }
 
-unsafe fn is_focused_in_web_content() -> bool {
-    let hwnd = GetForegroundWindow();
-    if hwnd.is_null() {
-        return false;
-    }
 
-    let mut pid: u32 = 0;
-    let tid = GetWindowThreadProcessId(hwnd, &mut pid);
-    if tid == 0 {
-        return false;
-    }
-
-    let mut gui_info: GUITHREADINFO = std::mem::zeroed();
-    gui_info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
-
-    if GetGUIThreadInfo(tid, &mut gui_info) != 0 && !gui_info.hwndFocus.is_null() {
-        let mut class_buf = [0u16; 256];
-        let len = GetClassNameW(gui_info.hwndFocus, class_buf.as_mut_ptr(), class_buf.len() as i32);
-        if len > 0 {
-            let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
-            // Trên Chrome, Edge, Brave, Cốc Cốc, Opera:
-            // Cửa sổ hiển thị nội dung trang web luôn có class name chứa "RenderWidgetHost"
-            // (ví dụ: Chrome_RenderWidgetHostHWND)
-            if class_name.contains("RenderWidgetHost") {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-unsafe fn is_foreground_browser_app(apps_list: &str) -> bool {
-    let hwnd = GetForegroundWindow();
-    if hwnd.is_null() {
-        return false;
-    }
-
-    let mut pid: u32 = 0;
-    GetWindowThreadProcessId(hwnd, &mut pid);
-    if pid == 0 {
-        return false;
-    }
-
-    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-    if process.is_null() {
-        return false;
-    }
-
-    let mut path_buf = [0u16; 1024];
-    let mut size = path_buf.len() as u32;
-    let ok = QueryFullProcessImageNameW(
-        process,
-        0,
-        path_buf.as_mut_ptr(),
-        &mut size,
-    );
-    CloseHandle(process);
-
-    if ok != 0 && size > 0 {
-        let full_path = String::from_utf16_lossy(&path_buf[..size as usize]);
-        let exe_name = std::path::Path::new(&full_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-
-        for app in apps_list.split(',') {
-            let app = app.trim().to_ascii_lowercase();
-            if !app.is_empty() && (exe_name == app || exe_name == format!("{}.exe", app)) {
-                return true;
-            }
-        }
-    }
-
-    false
-}
 
 /// Gửi chuỗi Backspace và Unicode Text nguyên tử (Atomic SendInput).
 /// Gửi chuẩn Win32 API tương thích hoàn hảo với mọi ứng dụng, trình duyệt Chrome, Edge, Firefox, Word, Excel.
@@ -597,26 +522,9 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
         return;
     }
 
-    let (is_browser, has_space_before) = {
-        let state = GLOBAL_STATE.lock().unwrap();
-        if state.config.browser_compatibility && backspaces > 0 {
-            (is_foreground_browser_app(&state.config.browser_apps), state.engine.has_space_before)
-        } else {
-            (false, false)
-        }
-    };
-
-    // Chỉ nuốt vùng chọn inline autocomplete khi:
-    // 1. Ứng dụng là trình duyệt (Chrome, Edge...)
-    // 2. Không phải đang gõ trong nội dung trang web (Google Docs, web search, text input...)
-    // 3. Chưa có dấu cách phía trước (!has_space_before)
-    // 4. Và là biến đổi ở ký tự đầu tiên (backspaces == 1)
-    // Nuốt vùng chọn inline autocomplete trên thanh địa chỉ trình duyệt:
-    // 1. Ứng dụng là trình duyệt (Chrome, Edge, Brave, Cốc Cốc, Opera)
-    // 2. Không phải đang gõ trong nội dung trang web (Google Docs, web search, Facebook...)
-    // 3. Chưa có dấu cách phía trước (!has_space_before) để không bao giờ nuốt dấu cách từ thứ hai ("arial là")
-    let need_omnibox_fix = is_browser && !has_space_before && !is_focused_in_web_content();
-    let total_backspaces = if need_omnibox_fix { backspaces + 1 } else { backspaces };
+    // Gửi chính xác số lượng backspaces cần thiết, không bao giờ nuốt dấu cách
+    // hay ký tự mở ngoặc / dấu câu phía trước của người dùng
+    let total_backspaces = backspaces;
     let mut inputs = Vec::with_capacity(total_backspaces * 2 + text.encode_utf16().count() * 2);
 
     // 1. Gửi chính xác số lượng phím Backspace cần xóa

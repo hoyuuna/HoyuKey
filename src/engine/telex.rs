@@ -202,14 +202,29 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
 
         if let Some(i) = found_uo {
             let mut new_chars = chars.clone();
-            let (_, _, t1, u1) = decompose_vietnamese_char(new_chars[i]).unwrap_or(('u', VowelMod::None, Tone::None, false));
-            let (_, _, t2, u2) = decompose_vietnamese_char(new_chars[i + 1]).unwrap_or(('o', VowelMod::None, Tone::None, false));
+            let is_thuo = i >= 2
+                && chars[..i].iter().collect::<String>().to_lowercase() == "th"
+                && chars.len() == i + 2;
 
-            let new_u = get_vietnamese_vowel('u', VowelMod::Horn, t1).unwrap_or('ư');
-            let new_u = if u1 { new_u.to_uppercase().next().unwrap_or(new_u) } else { new_u };
+            let (new_u, new_o) = if is_thuo {
+                // Với 'thuo' + 'w' (không có phụ âm cuối): biến thành 'thuơ' để gõ 'thuở'
+                let (_, _, _, u1) = decompose_vietnamese_char(new_chars[i]).unwrap_or(('u', VowelMod::None, Tone::None, false));
+                let (_, _, t2, u2) = decompose_vietnamese_char(new_chars[i + 1]).unwrap_or(('o', VowelMod::None, Tone::None, false));
+                let u_char = if u1 { 'U' } else { 'u' };
+                let o_char = get_vietnamese_vowel('o', VowelMod::Horn, t2).unwrap_or('ơ');
+                let o_char = if u2 { o_char.to_uppercase().next().unwrap_or(o_char) } else { o_char };
+                (u_char, o_char)
+            } else {
+                let (_, _, t1, u1) = decompose_vietnamese_char(new_chars[i]).unwrap_or(('u', VowelMod::None, Tone::None, false));
+                let (_, _, t2, u2) = decompose_vietnamese_char(new_chars[i + 1]).unwrap_or(('o', VowelMod::None, Tone::None, false));
 
-            let new_o = get_vietnamese_vowel('o', VowelMod::Horn, t2).unwrap_or('ơ');
-            let new_o = if u2 { new_o.to_uppercase().next().unwrap_or(new_o) } else { new_o };
+                let new_u = get_vietnamese_vowel('u', VowelMod::Horn, t1).unwrap_or('ư');
+                let new_u = if u1 { new_u.to_uppercase().next().unwrap_or(new_u) } else { new_u };
+
+                let new_o = get_vietnamese_vowel('o', VowelMod::Horn, t2).unwrap_or('ơ');
+                let new_o = if u2 { new_o.to_uppercase().next().unwrap_or(new_o) } else { new_o };
+                (new_u, new_o)
+            };
 
             new_chars[i] = new_u;
             new_chars[i + 1] = new_o;
@@ -505,7 +520,7 @@ pub fn select_tone_vowel_index(chars: &[char], vowel_indices: &[usize], modern_t
     }
 
     if modern_tone {
-        if matches!(vowels_str.as_str(), "oa" | "oe" | "uy") {
+        if matches!(vowels_str.as_str(), "oa" | "oe" | "uy" | "uo") {
             return vowel_indices[1];
         }
     }
