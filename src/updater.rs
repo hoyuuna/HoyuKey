@@ -35,7 +35,7 @@ pub struct ReleaseInfo {
 pub fn ensure_changelog_loaded(hwnd: HWND) {
     {
         let log = CHANGELOG_BODY.lock().unwrap();
-        if !log.is_empty() {
+        if !log.is_empty() && !log.starts_with("• Chưa") && !log.starts_with("• Đang") {
             return;
         }
     }
@@ -145,21 +145,130 @@ pub fn close_modal(hwnd: HWND) {
 }
 
 pub const UPDATE_URL: &str = "https://api.github.com/repos/hoyuuna/HoyuKey/releases";
+pub const ATOM_FEED_URL: &str = "https://github.com/hoyuuna/HoyuKey/releases.atom";
 
 fn fetch_all_releases() -> Result<Vec<ReleaseInfo>, String> {
-    let json_bytes = http_get(UPDATE_URL)?;
-    let json_str = String::from_utf8_lossy(&json_bytes);
-
-    let releases = parse_releases(&json_str);
-    if releases.is_empty() {
-        // Dự phòng nếu API trả về một object đơn lẻ thay vì mảng []
-        if let Some(single) = parse_single_release(&json_str) {
-            return Ok(vec![single]);
+    // 1. Thử GitHub REST API trước
+    if let Ok(json_bytes) = http_get(UPDATE_URL) {
+        let json_str = String::from_utf8_lossy(&json_bytes);
+        if !json_str.contains("rate limit") && !json_str.contains("API rate limit exceeded") {
+            let releases = parse_releases(&json_str);
+            if !releases.is_empty() {
+                return Ok(releases);
+            }
+            if let Some(single) = parse_single_release(&json_str) {
+                return Ok(vec![single]);
+            }
         }
-        return Err("Không tìm thấy thông tin phiên bản từ API".to_string());
+    }
+
+    // 2. Dự phòng qua Atom Feed công khai (không bao giờ bị GitHub chặn Rate Limit)
+    if let Ok(atom_releases) = fetch_releases_from_atom() {
+        if !atom_releases.is_empty() {
+            return Ok(atom_releases);
+        }
+    }
+
+    Err("Không thể kết nối đến GitHub để kiểm tra cập nhật".to_string())
+}
+
+fn fetch_releases_from_atom() -> Result<Vec<ReleaseInfo>, String> {
+    let atom_bytes = http_get(ATOM_FEED_URL)?;
+    let atom_str = String::from_utf8_lossy(&atom_bytes);
+
+    let mut releases = Vec::new();
+    for entry_block in atom_str.split("<entry>") {
+        if !entry_block.contains("</entry>") {
+            continue;
+        }
+
+        let tag = if let Some(tag_pos) = entry_block.find("/releases/tag/") {
+            let after = &entry_block[tag_pos + 14..];
+            if let Some(quote_pos) = after.find('"') {
+                after[..quote_pos].trim().to_string()
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        };
+
+        let download_url = format!(
+            "https://github.com/hoyuuna/HoyuKey/releases/download/{}/HoyuKey.exe",
+            tag
+        );
+
+        let body = if let Some(content_pos) = entry_block.find("<content") {
+            let after_content = &entry_block[content_pos..];
+            if let Some(tag_end) = after_content.find('>') {
+                let after = &after_content[tag_end + 1..];
+                if let Some(end_pos) = after.find("</content>") {
+                    clean_html_to_markdown(&after[..end_pos])
+                } else {
+                    "• Phiên bản mới của HoyuKey.".to_string()
+                }
+            } else {
+                "• Phiên bản mới của HoyuKey.".to_string()
+            }
+        } else {
+            "• Phiên bản mới của HoyuKey.".to_string()
+        };
+
+        releases.push(ReleaseInfo {
+            tag_name: tag,
+            download_url,
+            body,
+            is_prerelease: false,
+        });
     }
 
     Ok(releases)
+}
+
+fn clean_html_to_markdown(html: &str) -> String {
+    let unescaped = html
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+
+    let with_newlines = unescaped
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        .replace("</p>", "\n")
+        .replace("</li>", "\n")
+        .replace("</div>", "\n")
+        .replace("</h1>", "\n")
+        .replace("</h2>", "\n")
+        .replace("</h3>", "\n");
+
+    let mut in_tag = false;
+    let mut cleaned = String::new();
+    for ch in with_newlines.chars() {
+        if ch == '<' {
+            in_tag = true;
+        } else if ch == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            cleaned.push(ch);
+        }
+    }
+
+    let mut lines = Vec::new();
+    for line in cleaned.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    if lines.is_empty() {
+        "• Phiên bản mới của HoyuKey.".to_string()
+    } else {
+        lines.join("\n")
+    }
 }
 
 fn parse_releases(json: &str) -> Vec<ReleaseInfo> {
