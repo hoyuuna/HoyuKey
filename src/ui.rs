@@ -1211,10 +1211,9 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
         GdipSetPixelOffsetMode(graphics, PixelOffsetModeHighQuality);
         GdipSetTextRenderingHint(graphics, TextRenderingHintClearTypeGridFit);
 
-        // 4. Animation Bật Ra (Pop-out spring scale & fade)
+        // 4. Animation Fade-in mượt mà (thuần Alpha, không phóng to thu nhỏ)
         let anim_p = MODAL_ANIM_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
         let ease = 1.0 - (1.0 - anim_p).powi(3);
-        let scale = 0.82 + 0.18 * ease; // Pop mượt mà từ 82% lên 100%
 
         // Lớp kính mờ tối (Dark Frosted Glass Tint)
         let overlay_alpha = (0x99 as f32 * ease).round() as u32;
@@ -1232,74 +1231,88 @@ unsafe fn paint_shadcn_ui(dc: windows_sys::Win32::Graphics::Gdi::HDC, w: i32, h:
         GdipDeletePath(overlay_path);
         GdipDeleteBrush(overlay_brush as *mut GpBrush);
 
-        // 5. Card Modal bo góc bật ra ở giữa màn hình
-        let base_modal_w = 400.0;
-        let base_modal_h = 230.0;
-        let modal_w = (base_modal_w * scale).round() as i32;
-        let modal_h = (base_modal_h * scale).round() as i32;
+        // Helper áp dụng độ mờ Fade cho mọi màu sắc trong Modal
+        let fade_color = |c: u32| -> u32 {
+            let a = (((c >> 24) & 0xFF) as f32 * ease).round() as u32;
+            (a << 24) | (c & 0x00FFFFFF)
+        };
+
+        // 5. Card Modal bo góc cố định ở giữa màn hình (Fade-in thanh lịch)
+        let modal_w = 400;
+        let modal_h = 230;
         let modal_x = (w - modal_w) / 2;
         let modal_y = (h - modal_h) / 2;
 
-        gdiplus_draw_rounded_card(graphics, modal_x, modal_y, modal_w, modal_h, 14, ARGB_MODAL_BG, ARGB_MODAL_BORDER, 1.5);
+        gdiplus_draw_rounded_card(
+            graphics,
+            modal_x,
+            modal_y,
+            modal_w,
+            modal_h,
+            14,
+            fade_color(ARGB_MODAL_BG),
+            fade_color(ARGB_MODAL_BORDER),
+            1.5,
+        );
 
-        let modal_btn_y = modal_y + (165.0 * scale).round() as i32;
-        let btn_h = (42.0 * scale).round() as i32;
+        let modal_btn_y = modal_y + 165;
+        let btn_h = 42;
 
         match modal_state {
             1 => {
                 // Đang kiểm tra cập nhật...
-                draw_gdip_text_centered(graphics, font_modal_title, "Đang kiểm tra cập nhật...", modal_x, modal_y + (60.0 * scale).round() as i32, modal_w, 32, ARGB_TEXT_PRIMARY);
-                draw_gdip_text_centered(graphics, font_desc, "Đang kết nối máy chủ GitHub, vui lòng chờ.", modal_x, modal_y + (100.0 * scale).round() as i32, modal_w, 24, ARGB_TEXT_MUTED);
+                draw_gdip_text_centered(graphics, font_modal_title, "Đang kiểm tra cập nhật...", modal_x, modal_y + 60, modal_w, 32, fade_color(ARGB_TEXT_PRIMARY));
+                draw_gdip_text_centered(graphics, font_desc, "Đang kết nối máy chủ GitHub, vui lòng chờ.", modal_x, modal_y + 100, modal_w, 24, fade_color(ARGB_TEXT_MUTED));
             }
             2 => {
                 // Phát hiện bản mới!
                 let tag = crate::updater::LATEST_VERSION_TAG.lock().unwrap().clone();
-                draw_gdip_text_centered(graphics, font_modal_title, "Có bản cập nhật mới", modal_x, modal_y + (35.0 * scale).round() as i32, modal_w, 32, ARGB_TEXT_PRIMARY);
+                draw_gdip_text_centered(graphics, font_modal_title, "Có bản cập nhật mới", modal_x, modal_y + 35, modal_w, 32, fade_color(ARGB_TEXT_PRIMARY));
 
                 let desc = format!("Bản {} đã sẵn sàng. Bạn có muốn tải và cài đặt ngay không?", tag);
-                draw_gdip_text_multiline(graphics, font_desc, &desc, modal_x + (30.0 * scale).round() as i32, modal_y + (75.0 * scale).round() as i32, modal_w - (60.0 * scale).round() as i32, 60, ARGB_TEXT_MUTED);
+                draw_gdip_text_multiline(graphics, font_desc, &desc, modal_x + 30, modal_y + 75, modal_w - 60, 60, fade_color(ARGB_TEXT_MUTED));
 
                 // Nút "Để sau" (trái): ID 51
-                let btn_w = (166.0 * scale).round() as i32;
-                let cancel_x = modal_x + (24.0 * scale).round() as i32;
+                let btn_w = 166;
+                let cancel_x = modal_x + 24;
                 let cancel_bg = if hover_id == 51 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-                gdiplus_draw_rounded_card(graphics, cancel_x, modal_btn_y, btn_w, btn_h, 8, cancel_bg, ARGB_CARD_BORDER, 1.0);
-                draw_gdip_text_centered(graphics, font_btn, "Để sau", cancel_x, modal_btn_y, btn_w, btn_h, ARGB_TEXT_MUTED);
+                gdiplus_draw_rounded_card(graphics, cancel_x, modal_btn_y, btn_w, btn_h, 8, fade_color(cancel_bg), fade_color(ARGB_CARD_BORDER), 1.0);
+                draw_gdip_text_centered(graphics, font_btn, "Để sau", cancel_x, modal_btn_y, btn_w, btn_h, fade_color(ARGB_TEXT_MUTED));
 
                 // Nút "Cập nhật ngay" (phải): ID 50
-                let update_x = modal_x + (210.0 * scale).round() as i32;
+                let update_x = modal_x + 210;
                 let update_bg = if hover_id == 50 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
-                gdiplus_draw_rounded_card(graphics, update_x, modal_btn_y, btn_w, btn_h, 8, update_bg, ARGB_WHITE, 1.0);
-                draw_gdip_text_centered(graphics, font_btn, "Cập nhật ngay", update_x, modal_btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
+                gdiplus_draw_rounded_card(graphics, update_x, modal_btn_y, btn_w, btn_h, 8, fade_color(update_bg), fade_color(ARGB_WHITE), 1.0);
+                draw_gdip_text_centered(graphics, font_btn, "Cập nhật ngay", update_x, modal_btn_y, btn_w, btn_h, fade_color(ARGB_TEXT_DARK));
             }
             3 => {
                 // Đang tải cập nhật...
-                draw_gdip_text_centered(graphics, font_modal_title, "Đang tải bản cập nhật...", modal_x, modal_y + (60.0 * scale).round() as i32, modal_w, 32, ARGB_TEXT_PRIMARY);
-                draw_gdip_text_centered(graphics, font_desc, "HoyuKey sẽ tự động khởi động lại sau khi tải xong.", modal_x, modal_y + (100.0 * scale).round() as i32, modal_w, 24, ARGB_TEXT_MUTED);
+                draw_gdip_text_centered(graphics, font_modal_title, "Đang tải bản cập nhật...", modal_x, modal_y + 60, modal_w, 32, fade_color(ARGB_TEXT_PRIMARY));
+                draw_gdip_text_centered(graphics, font_desc, "HoyuKey sẽ tự động khởi động lại sau khi tải xong.", modal_x, modal_y + 100, modal_w, 24, fade_color(ARGB_TEXT_MUTED));
             }
             4 => {
                 // Bản mới nhất!
-                draw_gdip_text_centered(graphics, font_modal_title, "Bạn đang ở bản mới nhất", modal_x, modal_y + (40.0 * scale).round() as i32, modal_w, 32, ARGB_TEXT_PRIMARY);
+                draw_gdip_text_centered(graphics, font_modal_title, "Bạn đang ở bản mới nhất", modal_x, modal_y + 40, modal_w, 32, fade_color(ARGB_TEXT_PRIMARY));
                 let desc = format!("HoyuKey v{} đã là phiên bản mới nhất.", crate::updater::CURRENT_VERSION);
-                draw_gdip_text_centered(graphics, font_desc, &desc, modal_x, modal_y + (85.0 * scale).round() as i32, modal_w, 24, ARGB_TEXT_MUTED);
+                draw_gdip_text_centered(graphics, font_desc, &desc, modal_x, modal_y + 85, modal_w, 24, fade_color(ARGB_TEXT_MUTED));
 
                 // Nút "Đã hiểu": ID 50
-                let btn_w = (160.0 * scale).round() as i32;
+                let btn_w = 160;
                 let ok_btn_x = modal_x + (modal_w - btn_w) / 2;
                 let ok_bg = if hover_id == 50 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
-                gdiplus_draw_rounded_card(graphics, ok_btn_x, modal_btn_y, btn_w, btn_h, 8, ok_bg, ARGB_WHITE, 1.0);
-                draw_gdip_text_centered(graphics, font_btn, "Đã hiểu", ok_btn_x, modal_btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
+                gdiplus_draw_rounded_card(graphics, ok_btn_x, modal_btn_y, btn_w, btn_h, 8, fade_color(ok_bg), fade_color(ARGB_WHITE), 1.0);
+                draw_gdip_text_centered(graphics, font_btn, "Đã hiểu", ok_btn_x, modal_btn_y, btn_w, btn_h, fade_color(ARGB_TEXT_DARK));
             }
             5 => {
-                // Lỗi kết nối
-                draw_gdip_text_centered(graphics, font_modal_title, "Không kiểm tra được cập nhật", modal_x, modal_y + (40.0 * scale).round() as i32, modal_w, 32, ARGB_DANGER_TEXT);
-                draw_gdip_text_centered(graphics, font_desc, "Vui lòng kiểm tra lại kết nối mạng Internet.", modal_x, modal_y + (85.0 * scale).round() as i32, modal_w, 24, ARGB_TEXT_MUTED);
+                // Lỗi kết nối - Dùng màu chữ ARGB_TEXT_PRIMARY đồng nhất, sang trọng, không dùng màu đỏ
+                draw_gdip_text_centered(graphics, font_modal_title, "Không kiểm tra được cập nhật", modal_x, modal_y + 40, modal_w, 32, fade_color(ARGB_TEXT_PRIMARY));
+                draw_gdip_text_centered(graphics, font_desc, "Vui lòng kiểm tra lại kết nối mạng Internet.", modal_x, modal_y + 85, modal_w, 24, fade_color(ARGB_TEXT_MUTED));
 
-                let btn_w = (160.0 * scale).round() as i32;
+                let btn_w = 160;
                 let ok_btn_x = modal_x + (modal_w - btn_w) / 2;
                 let ok_bg = if hover_id == 50 { ARGB_WHITE_HOVER } else { ARGB_WHITE };
-                gdiplus_draw_rounded_card(graphics, ok_btn_x, modal_btn_y, btn_w, btn_h, 8, ok_bg, ARGB_WHITE, 1.0);
-                draw_gdip_text_centered(graphics, font_btn, "Đã hiểu", ok_btn_x, modal_btn_y, btn_w, btn_h, ARGB_TEXT_DARK);
+                gdiplus_draw_rounded_card(graphics, ok_btn_x, modal_btn_y, btn_w, btn_h, 8, fade_color(ok_bg), fade_color(ARGB_WHITE), 1.0);
+                draw_gdip_text_centered(graphics, font_btn, "Đã hiểu", ok_btn_x, modal_btn_y, btn_w, btn_h, fade_color(ARGB_TEXT_DARK));
             }
             _ => {}
         }
