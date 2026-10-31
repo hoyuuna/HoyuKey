@@ -6,7 +6,7 @@ use windows_sys::Win32::Graphics::Gdi::InvalidateRect;
 use windows_sys::Win32::Networking::WinInet::{
     InternetCloseHandle, InternetOpenUrlW, InternetOpenW, InternetReadFile,
     INTERNET_FLAG_IGNORE_CERT_CN_INVALID, INTERNET_FLAG_IGNORE_CERT_DATE_INVALID,
-    INTERNET_FLAG_RELOAD, INTERNET_OPEN_TYPE_DIRECT,
+    INTERNET_FLAG_RELOAD, INTERNET_FLAG_SECURE, INTERNET_OPEN_TYPE_DIRECT,
 };
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -23,6 +23,14 @@ pub static LATEST_VERSION_TAG: Mutex<String> = Mutex::new(String::new());
 pub static LATEST_DOWNLOAD_URL: Mutex<String> = Mutex::new(String::new());
 pub static CHANGELOG_BODY: Mutex<String> = Mutex::new(String::new());
 static IS_FETCHING_CHANGELOG: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone)]
+pub struct ReleaseInfo {
+    pub tag_name: String,
+    pub download_url: String,
+    pub body: String,
+    pub is_prerelease: bool,
+}
 
 pub fn ensure_changelog_loaded(hwnd: HWND) {
     {
@@ -41,9 +49,14 @@ pub fn ensure_changelog_loaded(hwnd: HWND) {
 
     std::thread::spawn(move || {
         let hwnd = hwnd_raw as HWND;
-        match fetch_latest_release_info() {
-            Ok((_tag, _url, body)) => {
-                *CHANGELOG_BODY.lock().unwrap() = body;
+        match fetch_all_releases() {
+            Ok(releases) => {
+                if let Some(first) = releases.first() {
+                    *CHANGELOG_BODY.lock().unwrap() = first.body.clone();
+                } else {
+                    *CHANGELOG_BODY.lock().unwrap() =
+                        "• Chưa có nhật ký thay đổi nào trên GitHub.".to_string();
+                }
             }
             Err(_) => {
                 *CHANGELOG_BODY.lock().unwrap() =
@@ -64,17 +77,29 @@ pub fn start_checking_update(hwnd: HWND) {
     let hwnd_raw = hwnd as isize;
     std::thread::spawn(move || {
         let hwnd = hwnd_raw as HWND;
-        match fetch_latest_release_info() {
-            Ok((latest_tag, download_url, body)) => {
-                *CHANGELOG_BODY.lock().unwrap() = body;
-                let clean_latest = latest_tag.trim_start_matches('v').trim();
-                let clean_current = CURRENT_VERSION.trim_start_matches('v').trim();
+        match fetch_all_releases() {
+            Ok(releases) => {
+                // Cập nhật nhật ký nếu có
+                if let Some(first) = releases.first() {
+                    *CHANGELOG_BODY.lock().unwrap() = first.body.clone();
+                }
 
-                if is_newer_version(clean_latest, clean_current) {
-                    *LATEST_VERSION_TAG.lock().unwrap() = latest_tag;
-                    *LATEST_DOWNLOAD_URL.lock().unwrap() = download_url;
-                    MODAL_STATE.store(2, Ordering::SeqCst);
+                // Chỉ thông báo cập nhật đối với các bản phát hành chính thức (không phải pre-release)
+                let official_release = releases.iter().find(|r| !r.is_prerelease);
+
+                if let Some(rel) = official_release {
+                    let clean_latest = rel.tag_name.trim_start_matches('v').trim();
+                    let clean_current = CURRENT_VERSION.trim_start_matches('v').trim();
+
+                    if is_newer_version(clean_latest, clean_current) && !rel.download_url.is_empty() {
+                        *LATEST_VERSION_TAG.lock().unwrap() = rel.tag_name.clone();
+                        *LATEST_DOWNLOAD_URL.lock().unwrap() = rel.download_url.clone();
+                        MODAL_STATE.store(2, Ordering::SeqCst);
+                    } else {
+                        MODAL_STATE.store(4, Ordering::SeqCst);
+                    }
                 } else {
+                    // Chưa có bản official release nào mới hơn
                     MODAL_STATE.store(4, Ordering::SeqCst);
                 }
             }
@@ -106,29 +131,94 @@ pub fn close_modal(hwnd: HWND) {
     crate::ui::close_modal_anim(hwnd);
 }
 
-pub const UPDATE_URL: &str = "https://api.github.com/repos/hoyuuna/HoyuKey/releases/latest";
+pub const UPDATE_URL: &str = "https://api.github.com/repos/hoyuuna/HoyuKey/releases";
 
-fn fetch_latest_release_info() -> Result<(String, String, String), String> {
+fn fetch_all_releases() -> Result<Vec<ReleaseInfo>, String> {
     let json_bytes = http_get(UPDATE_URL)?;
     let json_str = String::from_utf8_lossy(&json_bytes);
 
-    // Hỗ trợ cả định dạng máy chủ web riêng (version, download_url, changelog)
-    // lẫn định dạng GitHub Releases API (tag_name, assets[].browser_download_url, body)
-    let tag_name = extract_json_field(&json_str, "version")
-        .or_else(|| extract_json_field(&json_str, "tag_name"))
-        .ok_or_else(|| "Không tìm thấy version hoặc tag_name".to_string())?;
+    let releases = parse_releases(&json_str);
+    if releases.is_empty() {
+        // Dự phòng nếu API trả về một object đơn lẻ thay vì mảng []
+        if let Some(single) = parse_single_release(&json_str) {
+            return Ok(vec![single]);
+        }
+        return Err("Không tìm thấy thông tin phiên bản từ API".to_string());
+    }
 
-    let download_url = extract_json_field(&json_str, "download_url")
-        .or_else(|| extract_download_url(&json_str))
-        .ok_or_else(|| "Không tìm thấy download_url hoặc file tải về HoyuKey.exe".to_string())?;
+    Ok(releases)
+}
 
-    let body = extract_json_body_by_key(&json_str, "\"changelog\":")
-        .or_else(|| extract_json_body_by_key(&json_str, "\"body\":"))
+fn parse_releases(json: &str) -> Vec<ReleaseInfo> {
+    let mut list = Vec::new();
+    let mut depth = 0;
+    let mut start_idx = 0;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for (i, b) in json.bytes().enumerate() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if b == b'\\' {
+            escape = true;
+            continue;
+        }
+        if b == b'"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+
+        if b == b'{' {
+            if depth == 0 {
+                start_idx = i;
+            }
+            depth += 1;
+        } else if b == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                let block = &json[start_idx..=i];
+                if let Some(rel) = parse_single_release(block) {
+                    list.push(rel);
+                }
+            }
+        }
+    }
+
+    list
+}
+
+fn parse_single_release(block: &str) -> Option<ReleaseInfo> {
+    let tag_name = extract_json_field(block, "version")
+        .or_else(|| extract_json_field(block, "tag_name"))?;
+
+    let download_url = extract_json_field(block, "download_url")
+        .or_else(|| extract_download_url(block))
+        .unwrap_or_default();
+
+    let body = extract_json_body_by_key(block, "\"changelog\":")
+        .or_else(|| extract_json_body_by_key(block, "\"body\":"))
         .unwrap_or_else(|| {
-            "• Bản cập nhật mới nhất cho HoyuKey với nhiều tối ưu và sửa lỗi.".to_string()
+            "• Phiên bản mới của HoyuKey với nhiều cải tiến và sửa lỗi.".to_string()
         });
 
-    Ok((tag_name, download_url, body))
+    let is_prerelease = if let Some(idx) = block.find("\"prerelease\":") {
+        let sub = block[idx + 13..].trim_start();
+        sub.starts_with("true")
+    } else {
+        false
+    };
+
+    Some(ReleaseInfo {
+        tag_name,
+        download_url,
+        body,
+        is_prerelease,
+    })
 }
 
 fn extract_json_body_by_key(json: &str, key: &str) -> Option<String> {
@@ -227,7 +317,8 @@ fn http_get(url: &str) -> Result<Vec<u8>, String> {
         let wide_url = to_wide(url);
         let flags = INTERNET_FLAG_RELOAD
             | INTERNET_FLAG_IGNORE_CERT_CN_INVALID
-            | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
+            | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID
+            | INTERNET_FLAG_SECURE;
 
         let h_url = InternetOpenUrlW(
             h_internet,
@@ -306,8 +397,6 @@ fn perform_update(hwnd: HWND, download_url: &str) {
 
     // 2. Tạo script cập nhật tự động
     let exe_name = current_exe.file_name().unwrap_or_default().to_string_lossy();
-    // Vòng lặp retry tự động: đợi process cũ đóng file hoàn toàn rồi mới ghi đè,
-    // giữ nguyên 100% đường dẫn file, Registry Startup và config.json
     let bat_content = format!(
         "@echo off\r\nsetlocal\r\ncd /d \"%~dp0\"\r\n:retry\r\ntimeout /t 1 /nobreak >nul\r\nmove /y \"HoyuKey_new.exe\" \"{}\" >nul 2>&1\r\nif exist \"HoyuKey_new.exe\" goto retry\r\nstart \"\" \"{}\"\r\ndel \"%~f0\"\r\n",
         exe_name, exe_name
@@ -319,7 +408,7 @@ fn perform_update(hwnd: HWND, download_url: &str) {
         return;
     }
 
-    // 3. Chạy script ngầm (không nháy cửa sổ console đen) và thoát ứng dụng
+    // 3. Chạy script ngầm và thoát ứng dụng
     let mut cmd = std::process::Command::new("cmd");
     cmd.args(["/C", &bat_file.to_string_lossy()]);
     #[cfg(windows)]
@@ -336,4 +425,41 @@ fn perform_update(hwnd: HWND, download_url: &str) {
 
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_releases_with_prerelease() {
+        let sample_json = r#"[
+            {
+                "tag_name": "v1.0.0",
+                "prerelease": true,
+                "body": "HoyuKey v1.0.0\nPhiên bản tự động",
+                "assets": [
+                    { "browser_download_url": "https://github.com/hoyuuna/HoyuKey/releases/download/v1.0.0/HoyuKey.exe" }
+                ]
+            },
+            {
+                "tag_name": "v0.9.0",
+                "prerelease": false,
+                "body": "Bản chính thức v0.9.0",
+                "assets": [
+                    { "browser_download_url": "https://github.com/hoyuuna/HoyuKey/releases/download/v0.9.0/HoyuKey.exe" }
+                ]
+            }
+        ]"#;
+
+        let list = parse_releases(sample_json);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].tag_name, "v1.0.0");
+        assert!(list[0].is_prerelease);
+        assert_eq!(list[1].tag_name, "v0.9.0");
+        assert!(!list[1].is_prerelease);
+
+        let official = list.iter().find(|r| !r.is_prerelease).unwrap();
+        assert_eq!(official.tag_name, "v0.9.0");
+    }
 }
