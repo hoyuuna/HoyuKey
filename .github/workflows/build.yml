@@ -83,7 +83,7 @@ jobs:
             | File | Dành cho |
             | :--- | :--- |
             | HoyuKey.exe | Windows x64 |
-          prerelease: true
+          prerelease: false
           draft: false
           files: |
             dist/HoyuKey.exe
