@@ -83,6 +83,16 @@ jobs:
             | File | Dành cho |
             | :--- | :--- |
             | HoyuKey.exe | Windows x64 |
+
+            ---
+            ### Hướng dẫn tránh bị Windows Security chặn nhầm:
+            Do phần mềm chưa có chữ ký số, Windows Security có thể nhận diện nhầm. Để phần mềm và tính năng tự động cập nhật hoạt động ổn định:
+            1. Tạo một thư mục riêng (ví dụ: C:\HoyuKey hoặc D:\HoyuKey) và đặt file HoyuKey.exe vào đó.
+            2. Thêm thư mục trên vào danh sách loại trừ (Exclusion) của Windows:
+               - Mở **Windows Security** -> chọn **Virus & threat protection**.
+               - Tại mục **Virus & threat protection settings**, nhấn **Manage settings**.
+               - Cuộn xuống mục **Exclusions**, nhấn **Add or remove exclusions**.
+               - Nhấn **Add an exclusion** -> chọn **Folder** rồi chọn thư mục bạn vừa tạo.
           prerelease: true
           draft: false
           files: |
