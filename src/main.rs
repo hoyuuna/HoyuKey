@@ -1,3 +1,4 @@
+// HoyuKey - Bộ gõ Tiếng Việt
 #![windows_subsystem = "windows"]
 
 mod config;
