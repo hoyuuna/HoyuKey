@@ -467,16 +467,19 @@ fn perform_update(hwnd: HWND, download_url: &str) {
     let bat_content = format!(
         "@echo off\r\n\
 chcp 65001 >nul\r\n\
+cd /d \"%~dp0\"\r\n\
+taskkill /f /im \"{}\" >nul 2>&1\r\n\
 timeout /t 1 /nobreak >nul\r\n\
 :retry\r\n\
 move /y \"HoyuKey_new.exe\" \"{}\" >nul 2>&1\r\n\
 if exist \"HoyuKey_new.exe\" (\r\n\
+    taskkill /f /im \"{}\" >nul 2>&1\r\n\
     timeout /t 1 /nobreak >nul\r\n\
     goto retry\r\n\
 )\r\n\
 start \"\" \"{}\"\r\n\
 del \"%~f0\" >nul 2>&1\r\n",
-        exe_name, exe_name
+        exe_name, exe_name, exe_name, exe_name
     );
 
     if let Err(_) = std::fs::write(&bat_file, bat_content) {
@@ -495,9 +498,8 @@ del \"%~f0\" >nul 2>&1\r\n",
     }
     let _ = cmd.spawn();
 
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
-    }
+    // Thoát tiến trình dứt khoát để nhả khóa file exe cho script cập nhật ghi đè
+    std::process::exit(0);
 }
 
 fn to_wide(s: &str) -> Vec<u16> {
