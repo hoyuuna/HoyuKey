@@ -121,35 +121,40 @@ const ARGB_MODAL_BORDER: u32 = 0xFF2E2E34;    // Viền modal
 
 pub fn init_ui_subsystems() {
     unsafe {
-        let mut token: usize = 0;
-        let input = GdiplusStartupInput {
-            GdiplusVersion: 1,
-            DebugEventCallback: 0,
-            SuppressBackgroundThread: 0,
-            SuppressExternalCodecs: 0,
-        };
-        if GdiplusStartup(&mut token, &input, null_mut()) == 0 {
-            GDIP_TOKEN.store(token, Ordering::SeqCst);
+        if GDIP_TOKEN.load(Ordering::SeqCst) == 0 {
+            let mut token: usize = 0;
+            let input = GdiplusStartupInput {
+                GdiplusVersion: 1,
+                DebugEventCallback: 0,
+                SuppressBackgroundThread: 0,
+                SuppressExternalCodecs: 0,
+            };
+            if GdiplusStartup(&mut token, &input, null_mut()) == 0 {
+                GDIP_TOKEN.store(token, Ordering::SeqCst);
+            }
         }
 
-        let mut c_fonts: u32 = 0;
-        AddFontMemResourceEx(
-            FONT_GOOGLE_SANS_REGULAR.as_ptr() as _,
-            FONT_GOOGLE_SANS_REGULAR.len() as u32,
-            null_mut(),
-            &mut c_fonts,
-        );
-        AddFontMemResourceEx(
-            FONT_GOOGLE_SANS_BOLD.as_ptr() as _,
-            FONT_GOOGLE_SANS_BOLD.len() as u32,
-            null_mut(),
-            &mut c_fonts,
-        );
+        static FONTS_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !FONTS_LOADED.swap(true, Ordering::SeqCst) {
+            let mut c_fonts: u32 = 0;
+            AddFontMemResourceEx(
+                FONT_GOOGLE_SANS_REGULAR.as_ptr() as _,
+                FONT_GOOGLE_SANS_REGULAR.len() as u32,
+                null_mut(),
+                &mut c_fonts,
+            );
+            AddFontMemResourceEx(
+                FONT_GOOGLE_SANS_BOLD.as_ptr() as _,
+                FONT_GOOGLE_SANS_BOLD.len() as u32,
+                null_mut(),
+                &mut c_fonts,
+            );
 
-        let p1 = to_wide("fonts\\GoogleSans-Regular.ttf");
-        let p2 = to_wide("fonts\\GoogleSans-Bold.ttf");
-        AddFontResourceExW(p1.as_ptr(), 0x10, null_mut());
-        AddFontResourceExW(p2.as_ptr(), 0x10, null_mut());
+            let p1 = to_wide("fonts\\GoogleSans-Regular.ttf");
+            let p2 = to_wide("fonts\\GoogleSans-Bold.ttf");
+            AddFontResourceExW(p1.as_ptr(), 0x10, null_mut());
+            AddFontResourceExW(p2.as_ptr(), 0x10, null_mut());
+        }
     }
 }
 
@@ -562,7 +567,6 @@ unsafe extern "system" fn settings_wnd_proc(
         }
         WM_DESTROY => {
             shutdown_ui_subsystems();
-            PostQuitMessage(0);
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),

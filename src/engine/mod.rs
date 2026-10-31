@@ -2,7 +2,7 @@ pub mod telex;
 pub mod vietnamese;
 pub mod vni;
 
-use crate::config::{Config, InputMethod, SwitchKey};
+use crate::config::{Config, InputMethod};
 use crate::engine::vietnamese::{decompose_vietnamese_char, Tone};
 
 #[derive(Debug, PartialEq, Eq)]
