@@ -358,6 +358,74 @@ fn http_get(url: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+#[link(name = "urlmon")]
+extern "system" {
+    fn URLDownloadToFileW(
+        p_caller: *mut std::ffi::c_void,
+        sz_url: *const u16,
+        sz_file_name: *const u16,
+        dw_reserved: u32,
+        lpfn_cb: *mut std::ffi::c_void,
+    ) -> i32;
+}
+
+fn download_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
+    // Cách 1: Dùng URLDownloadToFileW từ urlmon.dll (chuẩn Windows API, tự động xử lý HTTP 302 redirect từ GitHub sang Azure/S3)
+    let wide_url = to_wide(url);
+    let wide_dest = to_wide(&dest.to_string_lossy());
+
+    let hr = unsafe {
+        URLDownloadToFileW(
+            null_mut(),
+            wide_url.as_ptr(),
+            wide_dest.as_ptr(),
+            0,
+            null_mut(),
+        )
+    };
+
+    if hr == 0 {
+        if let Ok(meta) = std::fs::metadata(dest) {
+            if meta.len() > 100_000 {
+                return Ok(());
+            }
+        }
+    }
+
+    // Cách 2: Dự phòng bằng curl.exe có sẵn trên Windows 10/11
+    let curl_status = std::process::Command::new("curl.exe")
+        .args([
+            "-L", // Follow redirects
+            "-s", // Silent
+            "-f", // Fail on error
+            "-o",
+            &dest.to_string_lossy(),
+            "-H",
+            "User-Agent: HoyuKey-Updater/1.0",
+            url,
+        ])
+        .status();
+
+    if let Ok(st) = curl_status {
+        if st.success() {
+            if let Ok(meta) = std::fs::metadata(dest) {
+                if meta.len() > 100_000 {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    // Cách 3: Dự phòng cuối cùng bằng WinInet http_get
+    let data = http_get(url)?;
+    if data.len() < 100_000 {
+        return Err("File tải về bị lỗi kích thước".to_string());
+    }
+    std::fs::write(dest, &data).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 fn perform_update(hwnd: HWND, download_url: &str) {
     let current_exe = match std::env::current_exe() {
         Ok(p) => p,
@@ -379,17 +447,8 @@ fn perform_update(hwnd: HWND, download_url: &str) {
     let update_exe = current_dir.join("HoyuKey_new.exe");
     let bat_file = current_dir.join("update_hoyukey.bat");
 
-    // 1. Tải file mới
-    let data = match http_get(download_url) {
-        Ok(d) => d,
-        Err(_) => {
-            MODAL_STATE.store(5, Ordering::SeqCst);
-            unsafe { InvalidateRect(hwnd, null_mut(), 0); }
-            return;
-        }
-    };
-
-    if let Err(_) = std::fs::write(&update_exe, &data) {
+    // 1. Tải file mới (tự động xử lý redirect 302 từ GitHub sang CDN)
+    if let Err(_) = download_file(download_url, &update_exe) {
         MODAL_STATE.store(5, Ordering::SeqCst);
         unsafe { InvalidateRect(hwnd, null_mut(), 0); }
         return;
