@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, AtomicU32, Ordering};
 use std::sync::Mutex;
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Threading::{
@@ -69,6 +69,10 @@ static LAST_FOREGROUND_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static CTRL_IS_DOWN: AtomicBool = AtomicBool::new(false);
 static SHIFT_IS_DOWN: AtomicBool = AtomicBool::new(false);
 static CTRL_SHIFT_READY: AtomicBool = AtomicBool::new(false);
+
+// Theo dõi phím đang giữ (auto-repeat) để tối ưu và tránh nghẽn luồng phím Windows
+static LAST_PHYSICAL_VK: AtomicU32 = AtomicU32::new(0);
+static KEY_REPEAT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn install_hook() -> bool {
     unsafe {
@@ -295,49 +299,45 @@ unsafe extern "system" fn low_level_keyboard_proc(
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
-    // 2. Tự động kiểm tra thay đổi cửa sổ làm việc (chuyển tab trình duyệt, chuyển app)
-    let current_fg = GetForegroundWindow() as isize;
-    let prev_fg = LAST_FOREGROUND_WINDOW.swap(current_fg, Ordering::SeqCst);
-    if prev_fg != 0 && prev_fg != current_fg {
-        {
-            let mut state = GLOBAL_STATE.lock().unwrap();
-            state.engine.on_window_change();
-        }
-        on_focus_window_changed(current_fg as HWND);
-    }
-
     let vk = kbd.vkCode as u16;
     let vk_idx = (kbd.vkCode as usize) & 0xFF;
 
     let is_ctrl_key = vk == VK_CONTROL || vk == 0xA2 || vk == 0xA3;
     let is_shift_key = vk == VK_SHIFT || vk == 0xA0 || vk == 0xA1;
-
-    let switch_key = {
-        let state = GLOBAL_STATE.lock().unwrap();
-        state.config.switch_key
-    };
+    let is_z = vk == 0x5A || vk == b'Z' as u16 || vk == b'z' as u16;
 
     let is_down = (wparam as u32 == WM_KEYDOWN) || (wparam as u32 == WM_SYSKEYDOWN);
     let is_up = (wparam as u32 == WM_KEYUP) || (wparam as u32 == WM_SYSKEYUP);
 
-    // 3. Xử lý nhả phím (KeyUp):
+    // 2. Xử lý nhả phím (KeyUp):
     if is_up {
+        if LAST_PHYSICAL_VK.load(Ordering::Relaxed) == kbd.vkCode {
+            LAST_PHYSICAL_VK.store(0, Ordering::Relaxed);
+            KEY_REPEAT_COUNT.store(0, Ordering::Relaxed);
+        }
+
         // Nếu dùng phím tắt Ctrl + Shift: chuyển chế độ khi người dùng nhả phím (chuẩn Windows)
-        if switch_key == SwitchKey::CtrlShift {
-            if is_ctrl_key {
-                CTRL_IS_DOWN.store(false, Ordering::SeqCst);
-                if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) {
-                    toggle_vietnamese_mode();
-                }
-            } else if is_shift_key {
-                SHIFT_IS_DOWN.store(false, Ordering::SeqCst);
-                if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) {
-                    toggle_vietnamese_mode();
+        if is_ctrl_key || is_shift_key {
+            let switch_key = {
+                let state = GLOBAL_STATE.lock().unwrap();
+                state.config.switch_key
+            };
+            if switch_key == SwitchKey::CtrlShift {
+                if is_ctrl_key {
+                    CTRL_IS_DOWN.store(false, Ordering::SeqCst);
+                    if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) {
+                        toggle_vietnamese_mode();
+                    }
+                } else if is_shift_key {
+                    SHIFT_IS_DOWN.store(false, Ordering::SeqCst);
+                    if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) {
+                        toggle_vietnamese_mode();
+                    }
                 }
             }
         }
 
-        // Chặn KeyUp nếu KeyDown trước đó đã bị bộ gõ chặn (tránh desync trên Chrome/Edge)
+        // Chặn KeyUp nếu KeyDown tương ứng đã bị bộ gõ chặn (tránh desync trên Chrome/Edge)
         if BLOCKED_VK[vk_idx].swap(false, Ordering::SeqCst) {
             return 1;
         }
@@ -348,31 +348,61 @@ unsafe extern "system" fn low_level_keyboard_proc(
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
-    // 4. Kiểm tra phím tắt chuyển đổi chế độ V / E
-    match switch_key {
-        SwitchKey::CtrlShift => {
-            if is_ctrl_key {
-                CTRL_IS_DOWN.store(true, Ordering::SeqCst);
-                if SHIFT_IS_DOWN.load(Ordering::SeqCst) {
-                    CTRL_SHIFT_READY.store(true, Ordering::SeqCst);
-                }
-            } else if is_shift_key {
-                SHIFT_IS_DOWN.store(true, Ordering::SeqCst);
-                if CTRL_IS_DOWN.load(Ordering::SeqCst) {
-                    CTRL_SHIFT_READY.store(true, Ordering::SeqCst);
-                }
-            } else {
-                // Phím thứ 3 được nhấn -> hủy chuyển chế độ
-                CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
+    // 3. Theo dõi auto-repeat khi người dùng giữ phím
+    let repeat_count = if LAST_PHYSICAL_VK.load(Ordering::Relaxed) == kbd.vkCode {
+        KEY_REPEAT_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+    } else {
+        LAST_PHYSICAL_VK.store(kbd.vkCode, Ordering::Relaxed);
+        KEY_REPEAT_COUNT.store(0, Ordering::Relaxed);
+        0
+    };
+
+    // Tự động kiểm tra thay đổi cửa sổ làm việc (chuyển tab trình duyệt, chuyển app)
+    // Chỉ kiểm tra ở phím đầu tiên (không kiểm tra khi đang giữ lặp lại phím để tiết kiệm CPU)
+    if repeat_count == 0 {
+        let current_fg = GetForegroundWindow() as isize;
+        let prev_fg = LAST_FOREGROUND_WINDOW.swap(current_fg, Ordering::SeqCst);
+        if prev_fg != 0 && prev_fg != current_fg {
+            {
+                let mut state = GLOBAL_STATE.lock().unwrap();
+                state.engine.on_window_change();
             }
+            on_focus_window_changed(current_fg as HWND);
         }
-        SwitchKey::AltZ => {
-            let is_z = vk == 0x5A || vk == b'Z' as u16 || vk == b'z' as u16;
-            let alt_down = (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0;
-            if is_z && alt_down {
-                toggle_vietnamese_mode();
-                BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
-                return 1;
+    }
+
+    // 4. Kiểm tra phím tắt chuyển đổi chế độ V / E
+    if is_ctrl_key || is_shift_key || is_z {
+        let switch_key = {
+            let state = GLOBAL_STATE.lock().unwrap();
+            state.config.switch_key
+        };
+        match switch_key {
+            SwitchKey::CtrlShift => {
+                if is_ctrl_key {
+                    CTRL_IS_DOWN.store(true, Ordering::SeqCst);
+                    if SHIFT_IS_DOWN.load(Ordering::SeqCst) {
+                        CTRL_SHIFT_READY.store(true, Ordering::SeqCst);
+                    }
+                } else if is_shift_key {
+                    SHIFT_IS_DOWN.store(true, Ordering::SeqCst);
+                    if CTRL_IS_DOWN.load(Ordering::SeqCst) {
+                        CTRL_SHIFT_READY.store(true, Ordering::SeqCst);
+                    }
+                } else {
+                    // Phím thứ 3 được nhấn -> hủy chuyển chế độ
+                    CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
+                }
+            }
+            SwitchKey::AltZ => {
+                if is_z {
+                    let alt_down = (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0;
+                    if alt_down {
+                        toggle_vietnamese_mode();
+                        BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
+                        return 1;
+                    }
+                }
             }
         }
     }
@@ -386,17 +416,20 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
     if ctrl_pressed || alt_pressed || win_pressed {
         reset_engine();
+        BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
     // 6. Xử lý Backspace & các phím điều hướng ngắt từ
     match kbd.vkCode as u16 {
         VK_BACK => {
+            BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             let mut state = GLOBAL_STATE.lock().unwrap();
             let bs_action = state.engine.handle_backspace();
             drop(state);
 
             if let Some(KeyAction::Transform { backspaces, text }) = bs_action {
+                BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
                 send_transform_batch(backspaces, &text);
                 return 1;
             } else {
@@ -404,6 +437,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
             }
         }
         VK_RETURN => {
+            BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             let auto_dot = {
                 let mut state = GLOBAL_STATE.lock().unwrap();
                 let should_dot = state.config.auto_period_enter
@@ -421,6 +455,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
         VK_ESCAPE | VK_TAB | VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_HOME
         | VK_END | VK_PRIOR | VK_NEXT => {
             reset_engine();
+            BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
         _ => {}
@@ -428,10 +463,16 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
     // 7. Chuyển đổi mã phím thành ký tự Unicode
     if let Some(ch) = vk_to_char(kbd.vkCode, kbd.scanCode) {
-        let action = {
+        // Khi người dùng giữ phím (auto-repeat >= 3):
+        // Tuyệt đối không can thiệp biến đổi để tránh nghẽn luồng phím Windows & lag máy
+        let action = if repeat_count >= 3 {
             let mut state = GLOBAL_STATE.lock().unwrap();
-            let config = state.config.clone();
-            state.engine.process_char(ch, &config)
+            state.engine.current_word.push(ch);
+            KeyAction::PassThrough
+        } else {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            let state = &mut *state;
+            state.engine.process_char(ch, &state.config)
         };
 
         match action {
@@ -443,11 +484,13 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 return 1;
             }
             KeyAction::PassThrough | KeyAction::Reset | KeyAction::Backspace => {
+                BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
                 return CallNextHookEx(null_mut(), code, wparam, lparam);
             }
         }
     }
 
+    BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
     CallNextHookEx(null_mut(), code, wparam, lparam)
 }
 

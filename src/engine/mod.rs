@@ -479,6 +479,57 @@ mod tests {
     use crate::config::SwitchKey;
 
     #[test]
+    fn test_repeated_e_no_oscillation() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // 1st 'e' -> "e" (PassThrough)
+        let a1 = engine.process_char('e', &config);
+        assert_eq!(a1, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "e");
+
+        // 2nd 'e' -> "ê" (Transform)
+        let a2 = engine.process_char('e', &config);
+        assert_eq!(a2, KeyAction::Transform { backspaces: 1, text: "ê".to_string() });
+        assert_eq!(engine.current_word, "ê");
+
+        // 3rd 'e' -> "ee" (Undo transform)
+        let a3 = engine.process_char('e', &config);
+        assert_eq!(a3, KeyAction::Transform { backspaces: 1, text: "ee".to_string() });
+        assert_eq!(engine.current_word, "ee");
+
+        // 4th 'e' -> "eee" (Must be PassThrough! NEVER turn into "eê"!)
+        let a4 = engine.process_char('e', &config);
+        assert_eq!(a4, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "eee");
+
+        // 5th 'e' -> "eeee" (Must be PassThrough!)
+        let a5 = engine.process_char('e', &config);
+        assert_eq!(a5, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "eeee");
+    }
+
+    #[test]
+    fn test_repeated_d_no_oscillation() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        engine.process_char('d', &config);
+        assert_eq!(engine.current_word, "d");
+
+        engine.process_char('d', &config);
+        assert_eq!(engine.current_word, "đ");
+
+        engine.process_char('d', &config);
+        assert_eq!(engine.current_word, "dd");
+
+        // 4th 'd' -> "ddd" (Must be PassThrough! NEVER turn into "dđ"!)
+        let a4 = engine.process_char('d', &config);
+        assert_eq!(a4, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "ddd");
+    }
+
+    #[test]
     fn test_telex_chuyen() {
         let mut engine = Engine::new();
         let config = Config::default();

@@ -12,6 +12,11 @@ pub fn transform_vni(
         return None;
     }
 
+    // Không biến đổi lặp lại nếu từ đã kết thúc bằng chính phím số này (tránh dao động khi giữ phím số)
+    if word.ends_with(key) {
+        return None;
+    }
+
     if smart_english && super::telex::is_foreign_word(word) {
         return None;
     }
