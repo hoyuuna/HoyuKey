@@ -51,7 +51,15 @@ pub fn ensure_changelog_loaded(hwnd: HWND) {
         let hwnd = hwnd_raw as HWND;
         match fetch_all_releases() {
             Ok(releases) => {
-                if let Some(first) = releases.first() {
+                let clean_current = CURRENT_VERSION.trim_start_matches('v').trim();
+                let current_rel = releases.iter().find(|r| {
+                    let clean_tag = r.tag_name.trim_start_matches('v').trim();
+                    clean_tag == clean_current
+                });
+
+                if let Some(rel) = current_rel {
+                    *CHANGELOG_BODY.lock().unwrap() = rel.body.clone();
+                } else if let Some(first) = releases.first() {
                     *CHANGELOG_BODY.lock().unwrap() = first.body.clone();
                 } else {
                     *CHANGELOG_BODY.lock().unwrap() =
@@ -79,9 +87,14 @@ pub fn start_checking_update(hwnd: HWND) {
         let hwnd = hwnd_raw as HWND;
         match fetch_all_releases() {
             Ok(releases) => {
-                // Cập nhật nhật ký nếu có
-                if let Some(first) = releases.first() {
-                    *CHANGELOG_BODY.lock().unwrap() = first.body.clone();
+                // Cập nhật nhật ký bản hiện tại nếu chưa có
+                let clean_current = CURRENT_VERSION.trim_start_matches('v').trim();
+                let current_rel = releases.iter().find(|r| {
+                    let clean_tag = r.tag_name.trim_start_matches('v').trim();
+                    clean_tag == clean_current
+                });
+                if let Some(rel) = current_rel {
+                    *CHANGELOG_BODY.lock().unwrap() = rel.body.clone();
                 }
 
                 // Chỉ thông báo cập nhật đối với các bản phát hành chính thức (không phải pre-release)

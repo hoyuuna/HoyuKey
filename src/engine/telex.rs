@@ -299,21 +299,26 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
     }
 
     // 4. Áp dụng modifier mũ/móc/trăng TỰ DO cho nguyên âm bên trong từ (kể cả khi đã có phụ âm cuối)
-    // Sửa dứt điểm việc gõ 'hienej' -> 'hiện', 'viete' -> 'viêt', 'duocw' -> 'dược'
+    // Hỗ trợ đầy đủ: 'đot' + 'o' -> 'đôt' (thêm s -> 'đốt'), 'viet' + 'e' -> 'viêt', 'bat' + 'a' -> 'bât', 'dong' + 'o' -> 'đông'
     if free_marking {
-        // Chỉ duy nhất phím 'w' (dấu móc / trăng) mới được phép tác động tự do vào nguyên âm trước đó.
-        // Các phím nguyên âm 'a', 'e', 'o' chỉ tạo mũ khi gõ liền kề (aa->â, ee->ê, oo->ô),
-        // tuyệt đối không được nhảy cóc qua nguyên âm khác (ví dụ: 'ngoe' + 'o' phải là 'ngoeo', không được thành 'ngôe'!).
-        if key != 'w' {
-            return None;
-        }
-
         let vowel_indices = extract_vowel_indices(&chars);
         if !vowel_indices.is_empty() {
             let mut target_idx = None;
             let mut target_mod = None;
 
             for &idx in vowel_indices.iter().rev() {
+                // Với các phím nguyên âm 'a', 'e', 'o' (tạo mũ â, ê, ô):
+                // Chỉ cho phép tác động khi từ sau vị trí idx đến cuối từ KHÔNG CÓ nguyên âm nào khác
+                // (nghĩa là sau đó chỉ có thể là các phụ âm cuối như 't', 'c', 'n', 'p', 'm', 'ng', 'ch'...
+                // ví dụ: 'đot' + 'o' -> 'đôt', 'dong' + 'o' -> 'đông', 'bat' + 'a' -> 'bât', 'viet' + 'e' -> 'viêt'.
+                // Tuyệt đối không nhảy cóc qua nguyên âm khác như 'ngoe' + 'o' -> 'ngoeo'!).
+                if key != 'w' {
+                    let has_vowel_after = chars[idx + 1..].iter().any(|&c| decompose_vietnamese_char(c).is_some());
+                    if has_vowel_after {
+                        continue;
+                    }
+                }
+
                 if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
                     let m = match (base, vmod, key) {
                         ('a', VowelMod::None, 'a') => Some(VowelMod::Hat),
@@ -347,10 +352,17 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
                 return Some(new_chars.into_iter().collect());
             }
 
-            // Hoàn tác mũ/móc tự do nếu gõ lặp lại (ví dụ 'hiên' + 'e' -> 'hiene')
+            // Hoàn tác mũ/móc tự do nếu gõ lặp lại (ví dụ 'đôt' + 'o' -> 'đoto', 'hiên' + 'e' -> 'hiene')
             let mut undo_idx = None;
             let mut undo_base = ' ';
             for &idx in vowel_indices.iter().rev() {
+                if key != 'w' {
+                    let has_vowel_after = chars[idx + 1..].iter().any(|&c| decompose_vietnamese_char(c).is_some());
+                    if has_vowel_after {
+                        continue;
+                    }
+                }
+
                 if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
                     let is_undo = match (base, vmod, key) {
                         ('a', VowelMod::Hat, 'a') => true,

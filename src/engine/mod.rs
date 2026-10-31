@@ -220,7 +220,8 @@ impl Engine {
                 // Nếu auto_restore bật và từ mới tạo ra là âm tiết không hợp lệ trong tiếng Việt:
                 let chars: Vec<char> = self.current_word.chars().collect();
                 let vowel_indices = telex::extract_vowel_indices(&chars);
-                if config.auto_restore && !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&self.current_word) {
+                let starts_with_d_stroke = self.current_word.starts_with('đ') || self.current_word.starts_with('Đ');
+                if config.auto_restore && !starts_with_d_stroke && !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&self.current_word) {
                     let bs = self.current_word.chars().count();
                     let text = self.raw_keys.clone();
                     self.current_word = text.clone();
@@ -297,20 +298,23 @@ impl Engine {
         // Nếu từ chưa có nguyên âm nào (ví dụ: đt, đc, đk, đz, đm, đcl... và mọi kiểu viết tắt / teencode sáng tạo tự do),
         // bộ gõ tuyệt đối KHÔNG rollback, tôn trọng 100% mọi phong cách viết tắt không giới hạn của người dùng!
         if config.auto_restore && self.has_transformed {
-            let mut test_word = self.current_word.clone();
-            test_word.push(c);
-            let chars: Vec<char> = test_word.chars().collect();
-            let vowel_indices = telex::extract_vowel_indices(&chars);
+            let starts_with_d_stroke = self.current_word.starts_with('đ') || self.current_word.starts_with('Đ');
+            if !starts_with_d_stroke {
+                let mut test_word = self.current_word.clone();
+                test_word.push(c);
+                let chars: Vec<char> = test_word.chars().collect();
+                let vowel_indices = telex::extract_vowel_indices(&chars);
 
-            if !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&test_word) {
-                let backspaces = self.current_word.chars().count();
-                let text = self.raw_keys.clone();
-                self.current_word = text.clone();
-                self.has_transformed = false;
-                return KeyAction::Transform {
-                    backspaces,
-                    text,
-                };
+                if !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&test_word) {
+                    let backspaces = self.current_word.chars().count();
+                    let text = self.raw_keys.clone();
+                    self.current_word = text.clone();
+                    self.has_transformed = false;
+                    return KeyAction::Transform {
+                        backspaces,
+                        text,
+                    };
+                }
             }
         }
 
@@ -536,6 +540,26 @@ mod tests {
 
         // 3. Tự động chấm câu khi xuống dòng:
         assert!(engine.should_auto_period_before_enter());
+    }
+
+        #[test]
+    fn test_telex_dot_o_s() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "dd" -> "đ", "o" -> "đo", "t" -> "đot"
+        for ch in "ddot".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "đot");
+
+        // Gõ 'o' -> phải ra "đôt" (không bị ddoto)
+        engine.process_char('o', &config);
+        assert_eq!(engine.current_word, "đôt");
+
+        // Gõ 's' -> phải ra "đốt"
+        engine.process_char('s', &config);
+        assert_eq!(engine.current_word, "đốt");
     }
 
     #[test]
