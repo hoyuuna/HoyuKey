@@ -475,6 +475,7 @@ fn is_word_boundary(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SwitchKey;
 
     #[test]
     fn test_telex_chuyen() {
