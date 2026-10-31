@@ -49,7 +49,3 @@ cargo build --release
 File sau khi biên dịch nằm tại `target/release/hoyukey.exe`.
 
 ---
-
-## Giấy phép
-
-Phát hành theo giấy phép MIT.
