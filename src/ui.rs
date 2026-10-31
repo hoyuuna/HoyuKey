@@ -712,7 +712,7 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             }
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst);
             if anim_p > 200 {
-                let pill_y = 442;
+                let pill_y = 428;
                 let pill_h = 34;
                 if y >= pill_y && y <= pill_y + pill_h {
                     let total_w = card_w - 40;
@@ -942,12 +942,12 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
             } else {
                 let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst);
                 if anim_p > 200 {
-                    let pill_y = 442;
+                    let pill_y = 428;
                     let pill_h = 34;
                     if y >= pill_y && y <= pill_y + pill_h {
                         let total_w = card_w - 40;
                         let btn_w = (total_w - 18) / 4;
-                        let presets = [1, 2, 4, 8];
+                        let presets = [0, 1, 2, 4];
                         for (idx, &mb) in presets.iter().enumerate() {
                             let bx = (card_x + 20) + idx as i32 * (btn_w + 6);
                             if x >= bx && x <= bx + btn_w {
@@ -1640,18 +1640,18 @@ unsafe fn render_page_elements(
             let autostart_progress = START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, 246, autostart_progress);
 
-            // Card 3: Ép RAM chạy nền (Memory Limiter - đã thu gọn cằm, thêm icon cảnh báo vàng)
+            // Card 3: Điều chỉnh RAM chạy nền (Memory Limiter - vừa vặn hoàn hảo, không còn note thừa)
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
-            let card3_h = (70.0 + 104.0 * anim_ease).round() as i32; // Thu gọn cằm vừa vặn hoàn hảo
+            let card3_h = (70.0 + 82.0 * anim_ease).round() as i32;
             let card3_y = 318;
             gdiplus_draw_rounded_card(graphics, card_x, card3_y, card_w, card3_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
-            draw_gdip_text(graphics, font_bold, "Ép RAM chạy nền", left_text, card3_y + 14, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_bold, "Điều chỉnh RAM chạy nền", left_text, card3_y + 14, ARGB_TEXT_PRIMARY, false);
             // Icon cảnh báo màu vàng hổ phách sau tiêu đề cho mục nhạy cảm
-            draw_vector_warning_icon(graphics, left_text + 138, card3_y + 24, ARGB_ALERT_TEXT);
+            draw_vector_warning_icon(graphics, left_text + 195, card3_y + 24, ARGB_ALERT_TEXT);
 
-            draw_gdip_text(graphics, font_desc, "Khống chế mức RAM tối đa khi chạy ngầm", left_text, card3_y + 38, ARGB_TEXT_MUTED, false);
+            draw_gdip_text(graphics, font_desc, "Em <3 RAM hãy cho em RAM~", left_text, card3_y + 38, ARGB_TEXT_MUTED, false);
             let ram_limit_p = RAM_LIMIT_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, card3_y + 20, ram_limit_p);
 
@@ -1671,17 +1671,17 @@ unsafe fn render_page_elements(
                 let alert_text_color = (alpha_u8 << 24) | (ARGB_ALERT_TEXT & 0x00FFFFFF);
                 draw_gdip_text_centered(graphics, font_desc, "⚠ Chỉ sử dụng nếu bạn biết bạn đang làm gì!", left_text, alert_y, alert_w, alert_h, alert_text_color);
 
-                // 2. Các mốc an toàn (Segmented presets)
+                // 2. Các mốc cấu hình (Segmented presets: 512 KB, 1 MB, 2 MB, ĐÙ)
                 let pill_y = alert_y + alert_h + 8;
                 let pill_h = 32;
-                let presets = [1, 2, 4, 8];
+                let presets: [(u32, &str); 4] = [(0, "512 KB"), (1, "1 MB"), (2, "2 MB"), (4, "ĐÙ")];
                 let current_limit = {
                     let state = GLOBAL_STATE.lock().unwrap();
                     state.config.max_ram_mb
                 };
                 let btn_w = (alert_w - 18) / 4;
 
-                for (idx, &mb) in presets.iter().enumerate() {
+                for (idx, &(mb, label)) in presets.iter().enumerate() {
                     let bx = left_text + idx as i32 * (btn_w + 6);
                     let is_active = current_limit == mb;
                     let (bg, border, text_color) = if is_active {
@@ -1700,14 +1700,8 @@ unsafe fn render_page_elements(
                         )
                     };
                     gdiplus_draw_rounded_card(graphics, bx, pill_y, btn_w, pill_h, 6, bg, border, 1.0);
-                    let label = format!("{} MB", mb);
-                    draw_gdip_text_centered(graphics, font_btn, &label, bx, pill_y, btn_w, pill_h, text_color);
+                    draw_gdip_text_centered(graphics, font_btn, label, bx, pill_y, btn_w, pill_h, text_color);
                 }
-
-                // 3. Dòng giải thích an toàn (sát ngay dưới mốc, không còn cằm thừa)
-                let note_y = pill_y + pill_h + 6;
-                let note_color = (alpha_u8 << 24) | (ARGB_STATUS_MUTED & 0x00FFFFFF);
-                draw_gdip_text(graphics, font_desc, "* Mốc an toàn tối thiểu 1 MB để bộ gõ không bị tràn bộ nhớ", left_text, note_y, note_color, false);
             }
 
         } else if page == 3 {

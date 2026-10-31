@@ -67,7 +67,7 @@ impl Default for Config {
             browser_apps: "chrome.exe, msedge.exe, brave.exe, coccoc.exe, opera.exe".to_string(),
             remember_app_state: false,
             limit_ram: false,
-            max_ram_mb: 2,
+            max_ram_mb: 1,
         }
     }
 }

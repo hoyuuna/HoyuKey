@@ -391,7 +391,10 @@ fn handle_vni_tone(word: &str, key: char, modern_tone: bool) -> Option<String> {
             if has_ending {
                 vowel_indices[1]
             } else if modern_tone {
-                let s: String = vowel_indices.iter().map(|&i| chars[i].to_ascii_lowercase()).collect();
+                let s: String = vowel_indices
+                    .iter()
+                    .filter_map(|&i| decompose_vietnamese_char(chars[i]).map(|(base, _, _, _)| base))
+                    .collect();
                 if matches!(s.as_str(), "oa" | "oe" | "uy") {
                     vowel_indices[1]
                 } else {

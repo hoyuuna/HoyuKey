@@ -328,15 +328,15 @@ impl Engine {
 
 /// Kiểm tra một từ có phải là âm tiết tiếng Việt hợp lệ theo cấu trúc ngữ âm học hay không.
 pub fn is_valid_vietnamese_syllable(word: &str) -> bool {
-    let chars: Vec<char> = word.chars().collect();
+    let lower_word = word.to_lowercase();
+    let chars: Vec<char> = lower_word.chars().collect();
     if chars.is_empty() {
         return true;
     }
 
     // 1. Ký tự ngoại lai không có trong tiếng Việt:
     for &c in &chars {
-        let cl = c.to_ascii_lowercase();
-        if matches!(cl, 'f' | 'j' | 'w' | 'z') {
+        if matches!(c, 'f' | 'j' | 'w' | 'z') {
             return false;
         }
     }
@@ -366,19 +366,13 @@ pub fn is_valid_vietnamese_syllable(word: &str) -> bool {
     let last_vowel = *vowel_indices.last().unwrap();
 
     // 3. Kiểm tra phụ âm đầu theo bảng chữ cái ngữ âm tiếng Việt
-    let initial: String = chars[..first_vowel]
-        .iter()
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
+    let initial: String = chars[..first_vowel].iter().collect();
     if !is_valid_initial_consonant(&initial) {
         return false;
     }
 
     // 4. Kiểm tra phụ âm cuối theo bảng chữ cái ngữ âm tiếng Việt
-    let final_consonants: String = chars[last_vowel + 1..]
-        .iter()
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
+    let final_consonants: String = chars[last_vowel + 1..].iter().collect();
 
     if !is_valid_final_consonant(&final_consonants) {
         return false;
@@ -995,5 +989,172 @@ mod tests {
         let a = engine.process_char('f', &config);
         assert_eq!(a, KeyAction::Transform { backspaces: 2, text: "là".to_string() });
         assert_eq!(engine.has_space_before, true);
+    }
+
+    fn simulate_type(engine: &mut Engine, config: &Config, input: &str) -> String {
+        let mut output = String::new();
+        for ch in input.chars() {
+            let action = engine.process_char(ch, config);
+            match action {
+                KeyAction::PassThrough => {
+                    output.push(ch);
+                }
+                KeyAction::Transform { backspaces, text } => {
+                    for _ in 0..backspaces {
+                        output.pop();
+                    }
+                    output.push_str(&text);
+                }
+                KeyAction::Reset => {
+                    output.push(ch);
+                }
+                KeyAction::Backspace => {
+                    output.pop();
+                }
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn test_user_requested_dduf_capslock() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        let res = simulate_type(&mut engine, &config, "DDUF");
+        assert_eq!(res, "ĐÙ");
+    }
+
+    #[test]
+    fn test_user_requested_pangram() {
+        let mut engine = Engine::new();
+        let mut config = Config::default();
+        config.auto_caps_line = false;
+        config.modern_tone = true;
+
+        // Câu kiểm tra tổng hợp (Pangram chèn đủ 6 thanh & ký tự đặc biệt)
+        let input = "Traanf Vux Hairs Ddawng, mootj chuyeen gia xur lys phims ngoawfn ngoeof, ddang coos gawngs hoanf thieenj booj gox tuyeetj vowif nayf!";
+        let res = simulate_type(&mut engine, &config, input);
+        assert_eq!(
+            res,
+            "Trần Vũ Hải Đăng, một chuyên gia xử lý phím ngoằn ngoèo, đang cố gắng hoàn thiện bộ gõ tuyệt vời này!"
+        );
+
+        // Test với full CapsLock:
+        engine.reset();
+        let input_caps = "TRAANF VUX HAIRS DDAWNG, MOOTJ CHUYEEN GIA XUR LYS PHIMS NGOAWFN NGOEOF, DDANG COOS GAWNGS HOANF THIEENJ BOOJ GOX TUYEETJ VOWIF NAYF!";
+        let res_caps = simulate_type(&mut engine, &config, input_caps);
+        assert_eq!(
+            res_caps,
+            "TRẦN VŨ HẢI ĐĂNG, MỘT CHUYÊN GIA XỬ LÝ PHÍM NGOẰN NGOÈO, ĐANG CỐ GẮNG HOÀN THIỆN BỘ GÕ TUYỆT VỜI NÀY!"
+        );
+    }
+
+    #[test]
+    fn test_user_requested_complex_vowels() {
+        let mut engine = Engine::new();
+        let mut config = Config::default();
+        config.auto_caps_line = false;
+        config.modern_tone = true;
+
+        // "Con chim hoẵng quắt queo nhảy qua khoảnh sân ngoằn ngoèo, xoắn quẩy trong buổi chiều muộn."
+        let sentence = "Con chim hoawxng quawst queo nhayr qua khoarnh saan ngoawfn ngoeof, xoawns quarry trong buoir chieewf muoonj.";
+        let res = simulate_type(&mut engine, &config, sentence);
+        assert_eq!(
+            res,
+            "Con chim hoẵng quắt queo nhảy qua khoảnh sân ngoằn ngoèo, xoắn quẩy trong buổi chiều muộn."
+        );
+
+        // CapsLock toàn bộ câu:
+        engine.reset();
+        let sentence_caps = "CON CHIM HOAWXNG QUAWST QUEO NHAYR QUA KHOARNH SAAN NGOAWFN NGOEOF, XOAWNS QUARRY TRONG BUOIR CHIEEWF MUOONJ.";
+        let res_caps = simulate_type(&mut engine, &config, sentence_caps);
+        assert_eq!(
+            res_caps,
+            "CON CHIM HOẴNG QUẮT QUEO NHẢY QUA KHOẢNH SÂN NGOẰN NGOÈO, XOẮN QUẨY TRONG BUỔI CHIỀU MUỘN."
+        );
+    }
+
+    #[test]
+    fn test_user_requested_repeated_keys_undo() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // 1. Phím lặp hoàn tác dấu thanh: toans + s -> toans (phục hồi)
+        let r1 = simulate_type(&mut engine, &config, "toanss");
+        assert_eq!(r1, "toans");
+
+        // 2. Phím lặp hoàn tác dấu mũ: dd -> đ, ddd -> dd
+        engine.reset();
+        let r2 = simulate_type(&mut engine, &config, "ddd");
+        assert_eq!(r2, "dd");
+
+        // 3. Phím lặp hoàn tác dấu móc: w -> ư, ww -> w
+        engine.reset();
+        let r3 = simulate_type(&mut engine, &config, "ww");
+        assert_eq!(r3, "w");
+
+        // 4. Phím lặp hoàn tác CapsLock: D -> D, DD -> Đ, DDD -> DD
+        engine.reset();
+        let r4 = simulate_type(&mut engine, &config, "DDD");
+        assert_eq!(r4, "DD");
+    }
+
+    #[test]
+    fn test_user_requested_tone_placement() {
+        let mut engine = Engine::new();
+        let mut config_modern = Config::default();
+        config_modern.auto_caps_line = false;
+        config_modern.modern_tone = true;
+
+        // Hòa bình dưới cơn mưa thủy tinh làm bừng sáng cả góc trời thuở ấy (chuẩn mới)
+        let input = "Hoaf binhf duowis coern muwa thuyr tinh lamf buwngf sangs car goocj troeif thuowr aays.";
+        let res_modern = simulate_type(&mut engine, &config_modern, input);
+        assert_eq!(
+            res_modern,
+            "Hòa bình dưới cơn mưa thủy tinh làm bừng sáng cả góc trời thuở ấy."
+        );
+
+        // Chuẩn cũ (hoà, thuỷ):
+        let mut config_old = Config::default();
+        config_old.auto_caps_line = false;
+        config_old.modern_tone = false;
+        engine.reset();
+        let res_old = simulate_type(&mut engine, &config_old, input);
+        assert_eq!(
+            res_old,
+            "Hoà bình dưới cơn mưa thuỷ tinh làm bừng sáng cả góc trời thuở ấy."
+        );
+
+        // CapsLock chuẩn mới:
+        engine.reset();
+        let input_caps = "HOAF BINHF DUOWIS COERN MUWA THUYR TINH LAMF BUWNGF SANGS CAR GOOCJ TROEIF THUOWR AAYS.";
+        let res_caps = simulate_type(&mut engine, &config_modern, input_caps);
+        assert_eq!(
+            res_caps,
+            "HÒA BÌNH DƯỚI CƠN MƯA THỦY TINH LÀM BỪNG SÁNG CẢ GÓC TRỜI THUỞ ẤY."
+        );
+    }
+
+    #[test]
+    fn test_user_requested_english_terms() {
+        let mut engine = Engine::new();
+        let mut config = Config::default();
+        config.auto_caps_line = false;
+        config.smart_english = true;
+
+        // "Developer đang debug ứng dụng trên Visual Studio Code, cài đặt PostgREST, Tailwind CSS và Supabase."
+        let input = "Developer ddang debug uwngs dujng treen Visual Studio Code, caif dtawtj PostgREST, Tailwind CSS vaaf Supabase.";
+        let res = simulate_type(&mut engine, &config, input);
+        assert_eq!(
+            res,
+            "Developer đang debug ứng dụng trên Visual Studio Code, cài đặt PostgREST, Tailwind CSS và Supabase."
+        );
+
+        // CapsLock:
+        engine.reset();
+        let input_caps = "DEVELOPER DEBUG POSTGREST TAILWIND CSS SUPABASE";
+        let res_caps = simulate_type(&mut engine, &config, input_caps);
+        assert_eq!(res_caps, "DEVELOPER DEBUG POSTGREST TAILWIND CSS SUPABASE");
     }
 }

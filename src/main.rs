@@ -267,9 +267,33 @@ pub fn apply_ram_limiter(config: &Config) {
     unsafe {
         SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
         if config.limit_ram {
-            let max_mb = config.max_ram_mb.clamp(1, 16) as usize;
+            match config.max_ram_mb {
+                0 => {
+                    // 512 KB cực hạn
+                    let min_bytes = 256 * 1024;
+                    let max_bytes = 512 * 1024;
+                    SetProcessWorkingSetSize(GetCurrentProcess(), min_bytes, max_bytes);
+                }
+                1 => {
+                    // 1 MB
+                    let min_bytes = 512 * 1024;
+                    let max_bytes = 1024 * 1024;
+                    SetProcessWorkingSetSize(GetCurrentProcess(), min_bytes, max_bytes);
+                }
+                2 => {
+                    // 2 MB
+                    let min_bytes = 512 * 1024;
+                    let max_bytes = 2 * 1024 * 1024;
+                    SetProcessWorkingSetSize(GetCurrentProcess(), min_bytes, max_bytes);
+                }
+                _ => {
+                    // "ĐÙ" (không giới hạn): chỉ xả working set, không kẹp trần
+                }
+            }
+        } else {
+            // Mặc định khi tắt mục này: 1 MB
             let min_bytes = 512 * 1024;
-            let max_bytes = max_mb * 1024 * 1024;
+            let max_bytes = 1024 * 1024;
             SetProcessWorkingSetSize(GetCurrentProcess(), min_bytes, max_bytes);
         }
     }

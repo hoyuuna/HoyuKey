@@ -478,9 +478,10 @@ pub fn select_tone_vowel_index(chars: &[char], vowel_indices: &[usize], modern_t
     } else if modified_vowels.len() > 1 {
         // Cặp 'ươ' (ví dụ: 'đường', 'người', 'thương') -> dấu thanh luôn đặt trên 'ơ'
         for &idx in &modified_vowels {
-            let c = chars[idx].to_ascii_lowercase();
-            if c == 'ơ' || c == 'o' {
-                return idx;
+            if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
+                if base == 'o' && vmod == VowelMod::Horn {
+                    return idx;
+                }
             }
         }
         return *modified_vowels.last().unwrap();
@@ -496,7 +497,10 @@ pub fn select_tone_vowel_index(chars: &[char], vowel_indices: &[usize], modern_t
     let last_vowel_idx = *vowel_indices.last().unwrap();
     let has_ending_consonant = last_vowel_idx < chars.len() - 1;
 
-    let vowels_str: String = vowel_indices.iter().map(|&i| chars[i].to_ascii_lowercase()).collect();
+    let vowels_str: String = vowel_indices
+        .iter()
+        .filter_map(|&i| decompose_vietnamese_char(chars[i]).map(|(base, _, _, _)| base))
+        .collect();
 
     if has_ending_consonant {
         return vowel_indices[1];
