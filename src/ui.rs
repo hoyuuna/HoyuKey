@@ -10,11 +10,12 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::Graphics::GdiPlus::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, GetClientRect, GetCursorPos,
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
     GetSystemMetrics, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
     SendMessageW, SetCursor, SetForegroundWindow, SetTimer, ShowWindow, CS_HREDRAW, CS_VREDRAW,
-    IDC_ARROW, IDC_HAND, ICON_BIG, ICON_SMALL, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_RESTORE,
+    IDC_ARROW, IDC_HAND, ICON_BIG, ICON_SMALL, SM_CXSCREEN, SM_CYSCREEN, SW_RESTORE,
     SW_SHOW, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCMOUSEMOVE,
     WM_PAINT, WM_SETCURSOR, WM_SETICON, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_EX_DLGMODALFRAME,
     WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
@@ -199,7 +200,10 @@ pub fn create_settings_window(hinstance: HMODULE) -> HWND {
             lpszClassName: class_name.as_ptr(),
         };
 
-        RegisterClassW(&wnd_class);
+        static CLASS_REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !CLASS_REGISTERED.swap(true, Ordering::SeqCst) {
+            RegisterClassW(&wnd_class);
+        }
 
         let mut rect = RECT {
             left: 0,
@@ -245,8 +249,23 @@ pub fn create_settings_window(hinstance: HMODULE) -> HWND {
     }
 }
 
+pub fn close_settings_window(hwnd: HWND) {
+    unsafe {
+        KillTimer(hwnd, TIMER_ID_ANIM);
+        DestroyWindow(hwnd);
+    }
+    SETTINGS_HWND.store(0, Ordering::SeqCst);
+    shutdown_ui_subsystems();
+    let config = GLOBAL_STATE.lock().unwrap().config.clone();
+    crate::apply_ram_limiter(&config);
+}
+
 pub fn show_settings_window() {
-    let hwnd = SETTINGS_HWND.load(Ordering::SeqCst) as HWND;
+    let mut hwnd = SETTINGS_HWND.load(Ordering::SeqCst) as HWND;
+    if hwnd.is_null() {
+        let hinstance = unsafe { GetModuleHandleW(null_mut()) };
+        hwnd = create_settings_window(hinstance);
+    }
     if hwnd != null_mut() {
         let mut state = GLOBAL_STATE.lock().unwrap();
         state.config.start_with_windows = crate::autostart::is_autostart_enabled();
@@ -538,7 +557,7 @@ unsafe extern "system" fn settings_wnd_proc(
             0
         }
         WM_CLOSE => {
-            ShowWindow(hwnd, SW_HIDE);
+            close_settings_window(hwnd);
             0
         }
         WM_DESTROY => {
@@ -789,9 +808,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
         }
         let btn2_x = card_x + btn_w + 12;
         if x >= btn2_x && x <= card_right {
-            unsafe {
-                ShowWindow(hwnd, SW_HIDE);
-            }
+            close_settings_window(hwnd);
             return;
         }
     }
@@ -1610,14 +1627,17 @@ unsafe fn render_page_elements(
             let autostart_progress = START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, 246, autostart_progress);
 
-            // Card 3: Ép RAM chạy nền (Memory Limiter với mốc an toàn & inline alert)
+            // Card 3: Ép RAM chạy nền (Memory Limiter - đã thu gọn cằm, thêm icon cảnh báo vàng)
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
-            let card3_h = (74.0 + 144.0 * anim_ease).round() as i32;
+            let card3_h = (70.0 + 104.0 * anim_ease).round() as i32; // Thu gọn cằm vừa vặn hoàn hảo
             let card3_y = 318;
             gdiplus_draw_rounded_card(graphics, card_x, card3_y, card_w, card3_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             draw_gdip_text(graphics, font_bold, "Ép RAM chạy nền", left_text, card3_y + 14, ARGB_TEXT_PRIMARY, false);
+            // Icon cảnh báo màu vàng hổ phách sau tiêu đề cho mục nhạy cảm
+            draw_vector_warning_icon(graphics, left_text + 138, card3_y + 24, ARGB_ALERT_TEXT);
+
             draw_gdip_text(graphics, font_desc, "Khống chế mức RAM tối đa khi chạy ngầm", left_text, card3_y + 38, ARGB_TEXT_MUTED, false);
             let ram_limit_p = RAM_LIMIT_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, card3_y + 20, ram_limit_p);
@@ -1625,11 +1645,11 @@ unsafe fn render_page_elements(
             if anim_ease > 0.02 {
                 let alpha_u8 = (255.0 * anim_ease).clamp(0.0, 255.0) as u32;
                 let divider_color = (alpha_u8 << 24) | (ARGB_DIVIDER & 0x00FFFFFF);
-                gdiplus_draw_line(graphics, left_text, card3_y + 68, right_ctrl, card3_y + 68, divider_color, 1.0);
+                gdiplus_draw_line(graphics, left_text, card3_y + 64, right_ctrl, card3_y + 64, divider_color, 1.0);
 
                 // 1. Inline Alert Cảnh báo
-                let alert_y = card3_y + 78;
-                let alert_h = 32;
+                let alert_y = card3_y + 72;
+                let alert_h = 30;
                 let alert_w = card_w - 40;
                 let alert_bg = (alpha_u8.min(34) << 24) | (ARGB_ALERT_BG & 0x00FFFFFF);
                 let alert_border = (alpha_u8.min(90) << 24) | (ARGB_ALERT_BORDER & 0x00FFFFFF);
@@ -1639,8 +1659,8 @@ unsafe fn render_page_elements(
                 draw_gdip_text_centered(graphics, font_desc, "⚠ Chỉ sử dụng nếu bạn biết bạn đang làm gì!", left_text, alert_y, alert_w, alert_h, alert_text_color);
 
                 // 2. Các mốc an toàn (Segmented presets)
-                let pill_y = alert_y + alert_h + 10;
-                let pill_h = 34;
+                let pill_y = alert_y + alert_h + 8;
+                let pill_h = 32;
                 let presets = [1, 2, 4, 8];
                 let current_limit = {
                     let state = GLOBAL_STATE.lock().unwrap();
@@ -1671,8 +1691,8 @@ unsafe fn render_page_elements(
                     draw_gdip_text_centered(graphics, font_btn, &label, bx, pill_y, btn_w, pill_h, text_color);
                 }
 
-                // 3. Dòng giải thích an toàn
-                let note_y = pill_y + pill_h + 8;
+                // 3. Dòng giải thích an toàn (sát ngay dưới mốc, không còn cằm thừa)
+                let note_y = pill_y + pill_h + 6;
                 let note_color = (alpha_u8 << 24) | (ARGB_STATUS_MUTED & 0x00FFFFFF);
                 draw_gdip_text(graphics, font_desc, "* Mốc an toàn tối thiểu 1 MB để bộ gõ không bị tràn bộ nhớ", left_text, note_y, note_color, false);
             }
@@ -1829,6 +1849,37 @@ unsafe fn render_page_elements(
 // ========================================================
 // 🎨 CÁC HÀM VẼ ICON VECTOR HIỆN ĐẠI (GDI+ PATH & PENS)
 // ========================================================
+
+unsafe fn draw_vector_warning_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, 1.4, UnitPixel, &mut pen);
+    if pen.is_null() {
+        return;
+    }
+    GdipSetPenStartCap(pen, LineCapRound);
+    GdipSetPenEndCap(pen, LineCapRound);
+    GdipSetPenLineJoin(pen, LineJoinRound);
+
+    let fx = cx as f32;
+    let fy = cy as f32;
+
+    let mut path: *mut GpPath = null_mut();
+    GdipCreatePath(FillModeAlternate, &mut path);
+    GdipAddPathLine(path, fx, fy - 6.0, fx + 6.5, fy + 5.5);
+    GdipAddPathLine(path, fx + 6.5, fy + 5.5, fx - 6.5, fy + 5.5);
+    GdipClosePathFigure(path);
+    GdipDrawPath(graphics, pen, path);
+    GdipDeletePath(path);
+
+    GdipDrawLine(graphics, pen, fx, fy - 2.5, fx, fy + 1.0);
+    let mut brush: *mut GpSolidFill = null_mut();
+    GdipCreateSolidFill(color_argb, &mut brush);
+    GdipFillEllipse(graphics, brush as *mut GpBrush, fx - 0.75, fy + 3.0, 1.5, 1.5);
+    GdipDeleteBrush(brush as *mut GpBrush);
+
+    GdipDeletePen(pen);
+}
+
 
 unsafe fn draw_vector_gear_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
     let fx = cx as f32;

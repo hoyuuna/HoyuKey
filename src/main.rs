@@ -25,7 +25,7 @@ use crate::tray::{
     TrayManager, IDM_AUTO_RESTORE, IDM_CONTROL_PANEL, IDM_EXIT, IDM_MODERN_TONE, IDM_TELEX,
     IDM_TOGGLE_MODE, IDM_VNI, WM_APP_SHOW_SETTINGS, WM_APP_TRAY, WM_APP_UPDATE_TRAY,
 };
-use crate::ui::{create_settings_window, show_settings_window};
+use crate::ui::show_settings_window;
 
 pub struct AppState {
     pub config: Config,
@@ -125,7 +125,7 @@ fn main() {
     }
     *TRAY_MANAGER.lock().unwrap() = Some(tray);
 
-    create_settings_window(hinstance);
+    // Dashboard UI chỉ được nạp khi người dùng mở, giúp chạy nền siêu nhẹ (< 0.8 MB)
 
     // 5. Cài đặt Low-Level Keyboard Hook
     if !hook::install_hook() {
