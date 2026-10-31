@@ -1,6 +1,6 @@
 # HoyuKey
 
-Bộ gõ tiếng Việt cho Windows được viết bằng Rust. Ứng dụng chạy trực tiếp dưới khay hệ thống (System Tray), dung lượng nhỏ gọn và không cần cài đặt.
+Bộ gõ tiếng Việt cho Windows được viết bằng Rust.
 
 ---
 
