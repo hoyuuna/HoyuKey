@@ -3,6 +3,10 @@ name: Build and Release HoyuKey
 on:
   push:
     branches: [ "master", "main" ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:
