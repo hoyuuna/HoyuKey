@@ -514,13 +514,28 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
 }
 
 unsafe fn is_focused_in_web_content() -> bool {
+    let hwnd = GetForegroundWindow();
+    if hwnd.is_null() {
+        return false;
+    }
+
+    let mut pid: u32 = 0;
+    let tid = GetWindowThreadProcessId(hwnd, &mut pid);
+    if tid == 0 {
+        return false;
+    }
+
     let mut gui_info: GUITHREADINFO = std::mem::zeroed();
     gui_info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
-    if GetGUIThreadInfo(0, &mut gui_info) != 0 && !gui_info.hwndFocus.is_null() {
+
+    if GetGUIThreadInfo(tid, &mut gui_info) != 0 && !gui_info.hwndFocus.is_null() {
         let mut class_buf = [0u16; 256];
         let len = GetClassNameW(gui_info.hwndFocus, class_buf.as_mut_ptr(), class_buf.len() as i32);
         if len > 0 {
             let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
+            // Trên Chrome, Edge, Brave, Cốc Cốc, Opera:
+            // Cửa sổ hiển thị nội dung trang web luôn có class name chứa "RenderWidgetHost"
+            // (ví dụ: Chrome_RenderWidgetHostHWND)
             if class_name.contains("RenderWidgetHost") {
                 return true;
             }
@@ -596,7 +611,11 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
     // 2. Không phải đang gõ trong nội dung trang web (Google Docs, web search, text input...)
     // 3. Chưa có dấu cách phía trước (!has_space_before)
     // 4. Và là biến đổi ở ký tự đầu tiên (backspaces == 1)
-    let need_omnibox_fix = is_browser && !has_space_before && backspaces == 1 && !is_focused_in_web_content();
+    // Nuốt vùng chọn inline autocomplete trên thanh địa chỉ trình duyệt:
+    // 1. Ứng dụng là trình duyệt (Chrome, Edge, Brave, Cốc Cốc, Opera)
+    // 2. Không phải đang gõ trong nội dung trang web (Google Docs, web search, Facebook...)
+    // 3. Chưa có dấu cách phía trước (!has_space_before) để không bao giờ nuốt dấu cách từ thứ hai ("arial là")
+    let need_omnibox_fix = is_browser && !has_space_before && !is_focused_in_web_content();
     let total_backspaces = if need_omnibox_fix { backspaces + 1 } else { backspaces };
     let mut inputs = Vec::with_capacity(total_backspaces * 2 + text.encode_utf16().count() * 2);
 

@@ -54,6 +54,7 @@ impl Engine {
         self.raw_keys.clear();
         self.has_transformed = false;
         self.last_word_before_space = None;
+        self.has_space_before = false;
     }
 
     pub fn on_enter(&mut self) {
