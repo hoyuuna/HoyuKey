@@ -106,7 +106,7 @@ pub fn close_modal(hwnd: HWND) {
     crate::ui::close_modal_anim(hwnd);
 }
 
-pub const UPDATE_URL: &str = "https://api.github.com/repos/hoyuuna/HoyuKey/releases";
+pub const UPDATE_URL: &str = "https://api.github.com/repos/hoyuuna/HoyuKey/releases/latest";
 
 fn fetch_latest_release_info() -> Result<(String, String, String), String> {
     let json_bytes = http_get(UPDATE_URL)?;

@@ -21,10 +21,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set dynamic version in Cargo.toml
+      - name: Calculate version and set in Cargo.toml
+        id: version
         shell: powershell
         run: |
-          $ver = "1.0.${{ github.run_number }}"
+          $run_num = ${{ github.run_number }}
+          $offset = 60
+          $patch = [Math]::Max(0, $run_num - $offset)
+          $ver = "1.0.$patch"
+          Write-Host "Calculated version: $ver (Build #$patch, Run #$run_num)"
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "patch=$patch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Setting version to $ver in Cargo.toml..."
           (Get-Content Cargo.toml) -replace 'version = "1.0.0"', "version = `"$ver`"" | Set-Content Cargo.toml
 
@@ -56,7 +63,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HoyuKey-v1.0.${{ github.run_number }}-Windows-x64
+          name: HoyuKey-v${{ steps.version.outputs.version }}-Windows-x64
           path: dist/HoyuKey.exe
           retention-days: 30
 
@@ -64,14 +71,14 @@ jobs:
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: "HoyuKey v1.0.${{ github.run_number }}"
+          tag_name: v${{ steps.version.outputs.version }}
+          name: "HoyuKey v${{ steps.version.outputs.version }}"
           body: |
-            HoyuKey v1.0.${{ github.run_number }}
+            HoyuKey v${{ steps.version.outputs.version }}
             (Phiên bản được build tự động)
 
-            Phiên bản: 1.0.${{ github.run_number }}
-            Commit: ${{ github.sha }} (Build #${{ github.run_number }})
+            Phiên bản: ${{ steps.version.outputs.version }}
+            Commit: ${{ github.sha }} (Build #${{ steps.version.outputs.patch }})
 
             | File | Dành cho |
             | :--- | :--- |
