@@ -140,8 +140,11 @@ fn main() {
         return;
     }
 
-    // Tối ưu hóa cực hạn: Ép giải phóng bộ nhớ khởi động, đưa RAM chạy nền xuống ~0.5 - 0.9 MB
-    trim_working_set();
+    // Áp dụng giới hạn RAM hoặc giải phóng bộ nhớ khởi động khi chạy nền
+    {
+        let config = GLOBAL_STATE.lock().unwrap().config.clone();
+        apply_ram_limiter(&config);
+    }
 
     // 6. Vòng lặp tin nhắn Windows (Message Loop)
     let mut msg: MSG = unsafe { std::mem::zeroed() };
@@ -260,9 +263,15 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Ép Windows thu hồi toàn bộ các trang nhớ và DLL dư thừa, đưa RAM chạy nền xuống ~0.5 - 0.9 MB
-fn trim_working_set() {
+pub fn apply_ram_limiter(config: &Config) {
     unsafe {
-        SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+        if config.limit_ram {
+            let max_mb = config.max_ram_mb.clamp(1, 16) as usize;
+            let min_bytes = 512 * 1024;
+            let max_bytes = max_mb * 1024 * 1024;
+            SetProcessWorkingSetSize(GetCurrentProcess(), min_bytes, max_bytes);
+        } else {
+            SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+        }
     }
 }

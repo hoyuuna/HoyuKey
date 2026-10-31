@@ -57,6 +57,8 @@ static BROWSER_COMPAT_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static BROWSER_INPUT_ANIM: AtomicU32 = AtomicU32::new(1000);
 static BROWSER_INPUT_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static REMEMBER_APP_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static RAM_LIMIT_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static RAM_LIMIT_ANIM: AtomicU32 = AtomicU32::new(0);
 
 // Quản lý trang và hiệu ứng chuyển trang (Smooth Page Transition Animation)
 static CURRENT_PAGE: AtomicU8 = AtomicU8::new(0);
@@ -109,7 +111,10 @@ const ARGB_WHITE_HOVER: u32 = 0xFFE4E4E7;     // #e4e4e7
 const ARGB_TEXT_DARK: u32 = 0xFF09090B;       // #09090b
 const ARGB_DANGER_TEXT: u32 = 0xFFEF4444;     // #ef4444
 const ARGB_DANGER_BORDER: u32 = 0xFF3F1D1D;   // #3f1d1d
-const ARGB_DANGER_HOVER: u32 = 0xFF2D1515;    // #2d1515
+const ARGB_DANGER_HOVER: u32 = 0xFF2D1515;
+const ARGB_ALERT_BG: u32 = 0x22F59E0B;
+const ARGB_ALERT_BORDER: u32 = 0x55F59E0B;
+const ARGB_ALERT_TEXT: u32 = 0xFFFBBF24;    // #2d1515
 const ARGB_MODAL_BG: u32 = 0xFF16161A;        // Nền modal
 const ARGB_MODAL_BORDER: u32 = 0xFF2E2E34;    // Viền modal
 
@@ -261,6 +266,8 @@ pub fn show_settings_window() {
         BROWSER_INPUT_ANIM.store(if state.config.browser_compatibility { 1000 } else { 0 }, Ordering::SeqCst);
         BROWSER_INPUT_FOCUSED.store(false, Ordering::SeqCst);
         REMEMBER_APP_PROGRESS.store(if state.config.remember_app_state { 1000 } else { 0 }, Ordering::SeqCst);
+        RAM_LIMIT_PROGRESS.store(if state.config.limit_ram { 1000 } else { 0 }, Ordering::SeqCst);
+        RAM_LIMIT_ANIM.store(if state.config.limit_ram { 1000 } else { 0 }, Ordering::SeqCst);
         HOVER_ITEM.store(-1, Ordering::SeqCst);
         drop(state);
 
@@ -417,6 +424,8 @@ unsafe extern "system" fn settings_wnd_proc(
                 advance_anim(if config.browser_compatibility { 1000 } else { 0 }, &BROWSER_COMPAT_PROGRESS);
                 advance_anim(if config.browser_compatibility { 1000 } else { 0 }, &BROWSER_INPUT_ANIM);
                 advance_anim(if config.remember_app_state { 1000 } else { 0 }, &REMEMBER_APP_PROGRESS);
+                advance_anim(if config.limit_ram { 1000 } else { 0 }, &RAM_LIMIT_PROGRESS);
+                advance_anim(if config.limit_ram { 1000 } else { 0 }, &RAM_LIMIT_ANIM);
 
                 // 3. Easing cuộn nội dung mượt mà 60 FPS
                 let curr_scroll = SCROLL_Y.load(Ordering::SeqCst);
@@ -666,6 +675,24 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             if x >= right_ctrl - 52 && x <= right_ctrl && y >= 238 && y <= 282 {
                 return 47;
             }
+            if x >= right_ctrl - 52 && x <= right_ctrl && y >= 332 && y <= 376 {
+                return 48;
+            }
+            let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst);
+            if anim_p > 200 {
+                let pill_y = 442;
+                let pill_h = 34;
+                if y >= pill_y && y <= pill_y + pill_h {
+                    let total_w = card_w - 40;
+                    let btn_w = (total_w - 18) / 4;
+                    for idx in 0..4 {
+                        let bx = (card_x + 20) + idx as i32 * (btn_w + 6);
+                        if x >= bx && x <= bx + btn_w {
+                            return 481 + idx as i32;
+                        }
+                    }
+                }
+            }
         } else if page == 3 {
             // Giới thiệu: Nút Kiểm tra cập nhật
             let btn_update_w = 240;
@@ -878,6 +905,32 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                 state.config.start_with_windows = new_val;
                 crate::autostart::set_autostart(new_val);
                 changed = true;
+            } else if x >= right_ctrl - 52 && x <= right_ctrl && y >= 332 && y <= 376 {
+                state.config.limit_ram = !state.config.limit_ram;
+                crate::apply_ram_limiter(&state.config);
+                changed = true;
+            } else {
+                let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst);
+                if anim_p > 200 {
+                    let pill_y = 442;
+                    let pill_h = 34;
+                    if y >= pill_y && y <= pill_y + pill_h {
+                        let total_w = card_w - 40;
+                        let btn_w = (total_w - 18) / 4;
+                        let presets = [1, 2, 4, 8];
+                        for (idx, &mb) in presets.iter().enumerate() {
+                            let bx = (card_x + 20) + idx as i32 * (btn_w + 6);
+                            if x >= bx && x <= bx + btn_w {
+                                if state.config.max_ram_mb != mb {
+                                    state.config.max_ram_mb = mb;
+                                    crate::apply_ram_limiter(&state.config);
+                                    changed = true;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         } else if page == 3 {
             // Nút Kiểm tra cập nhật
@@ -1556,6 +1609,73 @@ unsafe fn render_page_elements(
             draw_gdip_text(graphics, font_desc, "Tự động chạy HoyuKey khi đăng nhập máy tính", left_text, 265, ARGB_TEXT_MUTED, false);
             let autostart_progress = START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, 246, autostart_progress);
+
+            // Card 3: Ép RAM chạy nền (Memory Limiter với mốc an toàn & inline alert)
+            let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
+            let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
+            let card3_h = (74.0 + 144.0 * anim_ease).round() as i32;
+            let card3_y = 318;
+            gdiplus_draw_rounded_card(graphics, card_x, card3_y, card_w, card3_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+
+            draw_gdip_text(graphics, font_bold, "Ép RAM chạy nền", left_text, card3_y + 14, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Khống chế mức RAM tối đa khi chạy ngầm", left_text, card3_y + 38, ARGB_TEXT_MUTED, false);
+            let ram_limit_p = RAM_LIMIT_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, card3_y + 20, ram_limit_p);
+
+            if anim_ease > 0.02 {
+                let alpha_u8 = (255.0 * anim_ease).clamp(0.0, 255.0) as u32;
+                let divider_color = (alpha_u8 << 24) | (ARGB_DIVIDER & 0x00FFFFFF);
+                gdiplus_draw_line(graphics, left_text, card3_y + 68, right_ctrl, card3_y + 68, divider_color, 1.0);
+
+                // 1. Inline Alert Cảnh báo
+                let alert_y = card3_y + 78;
+                let alert_h = 32;
+                let alert_w = card_w - 40;
+                let alert_bg = (alpha_u8.min(34) << 24) | (ARGB_ALERT_BG & 0x00FFFFFF);
+                let alert_border = (alpha_u8.min(90) << 24) | (ARGB_ALERT_BORDER & 0x00FFFFFF);
+                gdiplus_draw_rounded_card(graphics, left_text, alert_y, alert_w, alert_h, 6, alert_bg, alert_border, 1.0);
+
+                let alert_text_color = (alpha_u8 << 24) | (ARGB_ALERT_TEXT & 0x00FFFFFF);
+                draw_gdip_text_centered(graphics, font_desc, "⚠ Chỉ sử dụng nếu bạn biết bạn đang làm gì!", left_text, alert_y, alert_w, alert_h, alert_text_color);
+
+                // 2. Các mốc an toàn (Segmented presets)
+                let pill_y = alert_y + alert_h + 10;
+                let pill_h = 34;
+                let presets = [1, 2, 4, 8];
+                let current_limit = {
+                    let state = GLOBAL_STATE.lock().unwrap();
+                    state.config.max_ram_mb
+                };
+                let btn_w = (alert_w - 18) / 4;
+
+                for (idx, &mb) in presets.iter().enumerate() {
+                    let bx = left_text + idx as i32 * (btn_w + 6);
+                    let is_active = current_limit == mb;
+                    let (bg, border, text_color) = if is_active {
+                        (
+                            (alpha_u8 << 24) | (ARGB_WHITE & 0x00FFFFFF),
+                            (alpha_u8 << 24) | (ARGB_WHITE & 0x00FFFFFF),
+                            (alpha_u8 << 24) | (ARGB_TEXT_DARK & 0x00FFFFFF),
+                        )
+                    } else {
+                        let is_hover = hover_id == (481 + idx as i32);
+                        let bg_color = if is_hover { ARGB_CARD_HOVER } else { ARGB_PILL_TRACK };
+                        (
+                            (alpha_u8 << 24) | (bg_color & 0x00FFFFFF),
+                            (alpha_u8 << 24) | (ARGB_CARD_BORDER & 0x00FFFFFF),
+                            (alpha_u8 << 24) | (ARGB_TEXT_MUTED & 0x00FFFFFF),
+                        )
+                    };
+                    gdiplus_draw_rounded_card(graphics, bx, pill_y, btn_w, pill_h, 6, bg, border, 1.0);
+                    let label = format!("{} MB", mb);
+                    draw_gdip_text_centered(graphics, font_btn, &label, bx, pill_y, btn_w, pill_h, text_color);
+                }
+
+                // 3. Dòng giải thích an toàn
+                let note_y = pill_y + pill_h + 8;
+                let note_color = (alpha_u8 << 24) | (ARGB_STATUS_MUTED & 0x00FFFFFF);
+                draw_gdip_text(graphics, font_desc, "* Mốc an toàn tối thiểu 1 MB để bộ gõ không bị tràn bộ nhớ", left_text, note_y, note_color, false);
+            }
 
         } else if page == 3 {
             // --- Trang Giới thiệu (Tối giản: Logo, Tên, Phiên bản, Nút Kiểm tra, Changelog) ---

@@ -42,6 +42,10 @@ pub struct Config {
     pub browser_apps: String,
     /// Ghi nhớ trạng thái E / V riêng cho từng ứng dụng khi chuyển cửa sổ
     pub remember_app_state: bool,
+    /// Ép giới hạn RAM chạy nền
+    pub limit_ram: bool,
+    /// Mức RAM tối đa (MB) khi chạy nền (mốc an toàn tối thiểu 1 MB, mặc định 2 MB)
+    pub max_ram_mb: u32,
 }
 
 impl Default for Config {
@@ -62,6 +66,8 @@ impl Default for Config {
             browser_compatibility: true,
             browser_apps: "chrome.exe, msedge.exe, brave.exe, coccoc.exe, opera.exe".to_string(),
             remember_app_state: false,
+            limit_ram: false,
+            max_ram_mb: 2,
         }
     }
 }
@@ -149,7 +155,7 @@ impl Config {
     pub fn to_json_string(&self) -> String {
         let escaped_browser_apps = self.browser_apps.replace('\\', "\\\\").replace('"', "\\\"");
         format!(
-            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {}\n}}\n",
+            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {},\n  \"limit_ram\": {},\n  \"max_ram_mb\": {}\n}}\n",
             self.enabled,
             match self.input_method {
                 InputMethod::Telex => "Telex",
@@ -171,6 +177,8 @@ impl Config {
             self.browser_compatibility,
             escaped_browser_apps,
             self.remember_app_state,
+            self.limit_ram,
+            self.max_ram_mb,
         )
     }
 
@@ -204,6 +212,12 @@ impl Config {
                 "browser_compatibility" => self.browser_compatibility = val == "true",
                 "browser_apps" => self.browser_apps = val,
                 "remember_app_state" => self.remember_app_state = val == "true",
+                "limit_ram" => self.limit_ram = val == "true",
+                "max_ram_mb" => {
+                    if let Ok(v) = val.parse::<u32>() {
+                        self.max_ram_mb = v.clamp(1, 16);
+                    }
+                }
                 // Tương thích ngược: Bỏ qua các trường lạ/chưa hỗ trợ mà không làm hỏng cấu hình
                 _ => {}
             }
@@ -308,6 +322,23 @@ mod tests {
         assert!(config.browser_apps.contains("chrome.exe"));
         assert_eq!(config.smart_english, true);
         assert_eq!(config.remember_app_state, false);
+        assert_eq!(config.limit_ram, false);
+        assert_eq!(config.max_ram_mb, 2);
+    }
+
+    #[test]
+    fn test_ram_limit_config() {
+        let json_with_ram = r#"{"limit_ram": true, "max_ram_mb": 4}"#;
+        let mut config = Config::default();
+        config.merge_from_json(json_with_ram);
+        assert_eq!(config.limit_ram, true);
+        assert_eq!(config.max_ram_mb, 4);
+
+        // Kiểm tra mốc an toàn tối thiểu 1 MB (không được nhỏ hơn 1)
+        let json_unsafe = r#"{"limit_ram": true, "max_ram_mb": 0}"#;
+        let mut config2 = Config::default();
+        config2.merge_from_json(json_unsafe);
+        assert_eq!(config2.max_ram_mb, 1);
     }
 
     #[test]
