@@ -1076,7 +1076,7 @@ pub fn init_caret_replacement_worker() {
         .ok();
 }
 
-unsafe fn get_clipboard_text() -> Option<String> {
+pub(crate) unsafe fn get_clipboard_text() -> Option<String> {
     for _ in 0..8 {
         if OpenClipboard(null_mut()) != 0 {
             let handle = GetClipboardData(CF_UNICODETEXT);

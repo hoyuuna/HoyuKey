@@ -9,14 +9,14 @@ use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, DIB_RGB_COLORS, HALFTONE, PAINTSTRUCT, SRCCOPY,
 };
 use windows_sys::Win32::Graphics::GdiPlus::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_CONTROL, VK_DELETE};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
     GetSystemMetrics, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
     SendMessageW, SetCursor, SetForegroundWindow, SetTimer, ShowWindow, CS_HREDRAW, CS_VREDRAW,
-    IDC_ARROW, IDC_HAND, ICON_BIG, ICON_SMALL, SM_CXSCREEN, SM_CYSCREEN, SW_RESTORE,
-    SW_SHOW, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCMOUSEMOVE,
+    IDC_ARROW, IDC_HAND, IDC_IBEAM, ICON_BIG, ICON_SMALL, SM_CXSCREEN, SM_CYSCREEN, SW_RESTORE,
+    SW_SHOW, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCMOUSEMOVE,
     WM_PAINT, WM_SETCURSOR, WM_SETICON, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_EX_DLGMODALFRAME,
     WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
 };
@@ -66,6 +66,443 @@ static BROWSER_INPUT_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic:
 static REMEMBER_APP_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static RAM_LIMIT_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static RAM_LIMIT_ANIM: AtomicU32 = AtomicU32::new(0);
+
+// Quản lý tìm kiếm trên Dashboard
+static SEARCH_QUERY: Mutex<String> = Mutex::new(String::new());
+static SEARCH_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SearchItemKind {
+    Toggle,
+    InputMethodPill,
+    SwitchKeyPill,
+    Action(u8),
+}
+
+pub struct SearchSettingItem {
+    pub id: u32,
+    pub title: &'static str,
+    pub desc: &'static str,
+    pub category: &'static str,
+    pub keywords: &'static str,
+    pub kind: SearchItemKind,
+}
+
+static ALL_SEARCH_ITEMS: &[SearchSettingItem] = &[
+    SearchSettingItem {
+        id: 1,
+        title: "Chế độ gõ Tiếng Việt",
+        desc: "Bật hoặc tạm tắt bộ gõ tiếng Việt (V / E)",
+        category: "Hệ thống",
+        keywords: "tieng viet vietnamese bat tat on off che do go status phím tắt",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 2,
+        title: "Kiểu gõ",
+        desc: "Chọn phương thức gõ Telex hoặc VNI",
+        category: "Cài đặt đánh máy",
+        keywords: "kieu go telex vni phuong thuc input method",
+        kind: SearchItemKind::InputMethodPill,
+    },
+    SearchSettingItem {
+        id: 3,
+        title: "Bỏ dấu tự do",
+        desc: "Bỏ dấu & thêm mũ Telex bất kỳ lúc nào trong từ",
+        category: "Cài đặt đánh máy",
+        keywords: "bo dau tu do free marking dau tu do mu telex dautudo",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 4,
+        title: "Đặt dấu kiểu mới",
+        desc: "Dấu xoà: oà, uỳ thay vì òa, ùy cổ điển",
+        category: "Cài đặt đánh máy",
+        keywords: "dat dau kieu moi modern tone dau xoa oa uy chuan moi",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 5,
+        title: "Nhận diện tiếng Anh thông minh",
+        desc: "Không biến dấu khi gõ từ tiếng Anh (file, fix, wifi...)",
+        category: "Cài đặt đánh máy",
+        keywords: "smart english tieng anh nhan dien tieng anh english fix wifi",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 6,
+        title: "Sửa dấu tại con trỏ (Caret)",
+        desc: "Nhận diện từ và sửa dấu khi click chuột / di chuyển con trỏ",
+        category: "Cài đặt đánh máy",
+        keywords: "sua dau con tro dynamic caret con tro caret sua dau trong tu modify tone",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 7,
+        title: "Telex giản lược",
+        desc: "Chỉ dùng các phím gõ dấu cơ bản, bỏ bớt tổ hợp nâng cao",
+        category: "Cài đặt đánh máy",
+        keywords: "telex gian luoc simple telex gian luoc rut gon",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 8,
+        title: "Viết hoa đầu dòng",
+        desc: "Tự động viết hoa chữ cái đầu tiên của dòng mới",
+        category: "Hỗ trợ viết",
+        keywords: "viet hoa dau dong auto caps line in hoa dau dong caps",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 9,
+        title: "Viết hoa sau dấu chấm",
+        desc: "Tự động viết hoa chữ cái sau dấu chấm câu (. ? !)",
+        category: "Hỗ trợ viết",
+        keywords: "viet hoa sau dau cham auto caps sentence dau cham cau moi",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 10,
+        title: "Tự thêm dấu chấm khi Enter",
+        desc: "Tự động thêm dấu chấm câu khi nhấn Enter xuống dòng",
+        category: "Hỗ trợ viết",
+        keywords: "them dau cham enter auto period enter cham enter xuong dong",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 11,
+        title: "Tự động khôi phục từ tiếng Anh",
+        desc: "Tự động hoàn tác dấu về từ gốc khi gõ từ không hợp lệ",
+        category: "Hỗ trợ viết",
+        keywords: "khoi phuc tu auto restore hoan tac tu tieng anh",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 12,
+        title: "Tương thích trình duyệt",
+        desc: "Tối ưu bộ đệm con trỏ trên Chrome, Edge, Brave, Cốc Cốc...",
+        category: "Nâng cao",
+        keywords: "tuong thich trinh duyet browser compatibility chrome edge brave coc coc web",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 13,
+        title: "Danh sách ứng dụng trình duyệt",
+        desc: "Chỉnh sửa danh sách tiến trình trình duyệt được tối ưu",
+        category: "Nâng cao",
+        keywords: "danh sach trinh duyet browser apps tien trinh process trinh duyet web",
+        kind: SearchItemKind::Action(5),
+    },
+    SearchSettingItem {
+        id: 14,
+        title: "Ghi nhớ chế độ từng ứng dụng",
+        desc: "Tự động lưu trạng thái E / V riêng cho mỗi phần mềm",
+        category: "Nâng cao",
+        keywords: "ghi nho ung dung remember app state nho che do chuyen cua so",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 15,
+        title: "Phím tắt chuyển đổi",
+        desc: "Phím tắt nhanh chuyển chế độ V / E (Ctrl+Shift hoặc Alt+Z)",
+        category: "Cài đặt HoyuKey",
+        keywords: "phim tat switch key ctrl shift alt z chuyen che do hotkey",
+        kind: SearchItemKind::SwitchKeyPill,
+    },
+    SearchSettingItem {
+        id: 16,
+        title: "Khởi động cùng Windows",
+        desc: "Tự động chạy HoyuKey khi bạn mở và đăng nhập máy tính",
+        category: "Cài đặt HoyuKey",
+        keywords: "khoi dong cung windows start with windows startup tu dong mo boot",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 17,
+        title: "Thông báo khi khởi động",
+        desc: "Hiện thông báo nhắc nhở khi HoyuKey vừa được kích hoạt",
+        category: "Cài đặt HoyuKey",
+        keywords: "thong bao khoi dong notify on startup notification nhac nho",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 18,
+        title: "Thông báo khi đổi chế độ",
+        desc: "Hiện thông báo mỗi khi bấm phím tắt bật/tắt Tiếng Việt",
+        category: "Cài đặt HoyuKey",
+        keywords: "thong bao doi che do notify on toggle thong bao v e",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 19,
+        title: "Tự động kiểm tra cập nhật",
+        desc: "Tự động tìm kiếm bản cập nhật mới mỗi khi mở ứng dụng",
+        category: "Cài đặt HoyuKey",
+        keywords: "tu dong kiem tra cap nhat auto check updates update nang cap",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 20,
+        title: "Nhận bản thử nghiệm (Pre-release)",
+        desc: "Nhận sớm các tính năng và bản vá mới nhất",
+        category: "Cài đặt HoyuKey",
+        keywords: "ban thu nghiem pre release prerelease beta thu nghiem",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 21,
+        title: "Giới hạn RAM chạy nền",
+        desc: "Tối ưu và ép mức tiêu thụ bộ nhớ RAM tối thiểu (1 - 2 MB)",
+        category: "Cài đặt HoyuKey",
+        keywords: "gioi han ram limit ram tiet kiem ram memory ram",
+        kind: SearchItemKind::Toggle,
+    },
+    SearchSettingItem {
+        id: 22,
+        title: "Kiểm tra cập nhật ngay",
+        desc: "Tìm kiếm và tải về phiên bản mới nhất từ máy chủ GitHub",
+        category: "Giới thiệu",
+        keywords: "kiem tra cap nhat ngay check updates now check update tai ve",
+        kind: SearchItemKind::Action(99),
+    },
+];
+
+pub fn normalize_vietnamese_for_search(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    for ch in text.chars() {
+        let lower = ch.to_lowercase().next().unwrap_or(ch);
+        let unaccented = match lower {
+            'à' | 'á' | 'ả' | 'ã' | 'ạ' | 'â' | 'ầ' | 'ấ' | 'ẩ' | 'ẫ' | 'ậ' | 'ă' | 'ằ' | 'ắ' | 'ẳ' | 'ẵ' | 'ặ' => 'a',
+            'è' | 'é' | 'ẻ' | 'ẽ' | 'ẹ' | 'ê' | 'ề' | 'ế' | 'ể' | 'ễ' | 'ệ' => 'e',
+            'ì' | 'í' | 'ỉ' | 'ĩ' | 'ị' => 'i',
+            'ò' | 'ó' | 'ỏ' | 'õ' | 'ọ' | 'ô' | 'ồ' | 'ố' | 'ổ' | 'ỗ' | 'ộ' | 'ơ' | 'ờ' | 'ớ' | 'ở' | 'ỡ' | 'ợ' => 'o',
+            'ù' | 'ú' | 'ủ' | 'ũ' | 'ụ' | 'ư' | 'ừ' | 'ứ' | 'ử' | 'ữ' | 'ự' => 'u',
+            'ỳ' | 'ý' | 'ỷ' | 'ỹ' | 'ỵ' => 'y',
+            'đ' => 'd',
+            c => c,
+        };
+        result.push(unaccented);
+    }
+    result
+}
+
+pub fn get_filtered_search_items(query: &str) -> Vec<&'static SearchSettingItem> {
+    let q_trimmed = query.trim();
+    if q_trimmed.is_empty() {
+        return Vec::new();
+    }
+    let q_norm = normalize_vietnamese_for_search(q_trimmed);
+    let q_lower = q_trimmed.to_lowercase();
+
+    ALL_SEARCH_ITEMS
+        .iter()
+        .filter(|item| {
+            let title_norm = normalize_vietnamese_for_search(item.title);
+            let desc_norm = normalize_vietnamese_for_search(item.desc);
+            let cat_norm = normalize_vietnamese_for_search(item.category);
+            let kw_norm = normalize_vietnamese_for_search(item.keywords);
+
+            title_norm.contains(&q_norm)
+                || desc_norm.contains(&q_norm)
+                || cat_norm.contains(&q_norm)
+                || kw_norm.contains(&q_norm)
+                || item.title.to_lowercase().contains(&q_lower)
+                || item.desc.to_lowercase().contains(&q_lower)
+        })
+        .collect()
+}
+
+fn get_current_username() -> String {
+    if let std::result::Result::Ok(name) = std::env::var("USERNAME") {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let std::result::Result::Ok(profile) = std::env::var("USERPROFILE") {
+        if let Some(name) = std::path::Path::new(&profile).file_name().and_then(|n| n.to_str()) {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    "Bạn".to_string()
+}
+
+fn get_item_toggle_progress(item_id: u32) -> f32 {
+    let p = match item_id {
+        1 => MODE_PROGRESS.load(Ordering::SeqCst),
+        3 => FREE_MARKING_PROGRESS.load(Ordering::SeqCst),
+        4 => MODERN_TONE_PROGRESS.load(Ordering::SeqCst),
+        5 => SMART_ENGLISH_PROGRESS.load(Ordering::SeqCst),
+        6 => DYNAMIC_CARET_PROGRESS.load(Ordering::SeqCst),
+        7 => SIMPLE_TELEX_PROGRESS.load(Ordering::SeqCst),
+        8 => AUTO_CAPS_LINE_PROGRESS.load(Ordering::SeqCst),
+        9 => AUTO_CAPS_SENTENCE_PROGRESS.load(Ordering::SeqCst),
+        10 => AUTO_PERIOD_ENTER_PROGRESS.load(Ordering::SeqCst),
+        11 => AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst),
+        12 => BROWSER_COMPAT_PROGRESS.load(Ordering::SeqCst),
+        14 => REMEMBER_APP_PROGRESS.load(Ordering::SeqCst),
+        16 => START_WITH_WINDOWS_PROGRESS.load(Ordering::SeqCst),
+        17 => NOTIFY_STARTUP_PROGRESS.load(Ordering::SeqCst),
+        18 => NOTIFY_TOGGLE_PROGRESS.load(Ordering::SeqCst),
+        19 => AUTO_CHECK_UPDATES_PROGRESS.load(Ordering::SeqCst),
+        20 => UPDATE_PRERELEASE_PROGRESS.load(Ordering::SeqCst),
+        21 => RAM_LIMIT_PROGRESS.load(Ordering::SeqCst),
+        _ => 0,
+    };
+    let p_norm = p as f32 / 1000.0;
+    1.0 - (1.0 - p_norm).powi(3)
+}
+
+fn handle_search_item_click(item_id: u32, hwnd: HWND) {
+    match item_id {
+        1 => {
+            crate::hook::toggle_vietnamese_mode();
+        }
+        2 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.input_method = match state.config.input_method {
+                InputMethod::Telex => InputMethod::Vni,
+                InputMethod::Vni => InputMethod::Telex,
+            };
+            let is_vni = state.config.input_method == InputMethod::Vni;
+            INPUT_METHOD_PROGRESS.store(if is_vni { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        3 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.free_marking = !state.config.free_marking;
+            FREE_MARKING_PROGRESS.store(if state.config.free_marking { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        4 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.modern_tone = !state.config.modern_tone;
+            MODERN_TONE_PROGRESS.store(if state.config.modern_tone { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        5 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.smart_english = !state.config.smart_english;
+            SMART_ENGLISH_PROGRESS.store(if state.config.smart_english { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        6 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.dynamic_caret = !state.config.dynamic_caret;
+            DYNAMIC_CARET_PROGRESS.store(if state.config.dynamic_caret { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        7 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.simple_telex = !state.config.simple_telex;
+            SIMPLE_TELEX_PROGRESS.store(if state.config.simple_telex { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        8 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.auto_caps_line = !state.config.auto_caps_line;
+            AUTO_CAPS_LINE_PROGRESS.store(if state.config.auto_caps_line { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        9 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.auto_caps_sentence = !state.config.auto_caps_sentence;
+            AUTO_CAPS_SENTENCE_PROGRESS.store(if state.config.auto_caps_sentence { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        10 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.auto_period_enter = !state.config.auto_period_enter;
+            AUTO_PERIOD_ENTER_PROGRESS.store(if state.config.auto_period_enter { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        11 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.auto_restore = !state.config.auto_restore;
+            AUTO_RESTORE_PROGRESS.store(if state.config.auto_restore { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        12 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.browser_compatibility = !state.config.browser_compatibility;
+            BROWSER_COMPAT_PROGRESS.store(if state.config.browser_compatibility { 1000 } else { 0 }, Ordering::SeqCst);
+            BROWSER_INPUT_ANIM.store(if state.config.browser_compatibility { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        13 => {
+            start_page_transition(hwnd, 5, 1);
+            return;
+        }
+        14 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.remember_app_state = !state.config.remember_app_state;
+            REMEMBER_APP_PROGRESS.store(if state.config.remember_app_state { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        15 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.switch_key = match state.config.switch_key {
+                SwitchKey::CtrlShift => SwitchKey::AltZ,
+                SwitchKey::AltZ => SwitchKey::CtrlShift,
+            };
+            let is_alt_z = state.config.switch_key == SwitchKey::AltZ;
+            SWITCH_KEY_PROGRESS.store(if is_alt_z { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        16 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.start_with_windows = !state.config.start_with_windows;
+            let val = state.config.start_with_windows;
+            START_WITH_WINDOWS_PROGRESS.store(if val { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+            crate::autostart::set_autostart(val);
+        }
+        17 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.notify_on_startup = !state.config.notify_on_startup;
+            NOTIFY_STARTUP_PROGRESS.store(if state.config.notify_on_startup { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        18 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.notify_on_toggle = !state.config.notify_on_toggle;
+            NOTIFY_TOGGLE_PROGRESS.store(if state.config.notify_on_toggle { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        19 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.auto_check_updates = !state.config.auto_check_updates;
+            AUTO_CHECK_UPDATES_PROGRESS.store(if state.config.auto_check_updates { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        20 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.update_prerelease = !state.config.update_prerelease;
+            UPDATE_PRERELEASE_PROGRESS.store(if state.config.update_prerelease { 1000 } else { 0 }, Ordering::SeqCst);
+            state.config.save();
+        }
+        21 => {
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.config.limit_ram = !state.config.limit_ram;
+            let val = state.config.limit_ram;
+            RAM_LIMIT_PROGRESS.store(if val { 1000 } else { 0 }, Ordering::SeqCst);
+            RAM_LIMIT_ANIM.store(if val { 1000 } else { 0 }, Ordering::SeqCst);
+            crate::apply_ram_limiter(&state.config);
+            state.config.save();
+        }
+        22 => {
+            crate::updater::start_checking_update(hwnd);
+        }
+        _ => {}
+    }
+    unsafe {
+        SetTimer(hwnd, TIMER_ID_ANIM, 16, None);
+        InvalidateRect(hwnd, null_mut(), 0);
+    }
+}
 
 // Quản lý trang và hiệu ứng chuyển trang (Smooth Page Transition Animation)
 static CURRENT_PAGE: AtomicU8 = AtomicU8::new(0);
@@ -558,16 +995,93 @@ unsafe extern "system" fn settings_wnd_proc(
             let w = rect.right - rect.left;
 
             let current_page = CURRENT_PAGE.load(Ordering::SeqCst);
-            if get_hovered_item(pt.x, pt.y, w, current_page) != -1 {
+            let hover = get_hovered_item(pt.x, pt.y, w, current_page);
+            if hover == 100 {
+                SetCursor(LoadCursorW(null_mut(), IDC_IBEAM));
+                1
+            } else if hover != -1 {
                 SetCursor(LoadCursorW(null_mut(), IDC_HAND));
                 1
             } else {
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
         }
+        WM_KEYDOWN => {
+            let page = CURRENT_PAGE.load(Ordering::SeqCst);
+            if page == 0 && SEARCH_FOCUSED.load(Ordering::SeqCst) {
+                if wparam as usize == 0x56 /* 'V' */ {
+                    let ctrl = (GetKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
+                    if ctrl {
+                        if let Some(text) = unsafe { crate::hook::get_clipboard_text() } {
+                            let mut q = SEARCH_QUERY.lock().unwrap();
+                            for ch in text.chars() {
+                                if !ch.is_control() && q.chars().count() < 40 {
+                                    q.push(ch);
+                                }
+                            }
+                            drop(q);
+                            SCROLL_Y.store(0, Ordering::SeqCst);
+                            TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+                            InvalidateRect(hwnd, null_mut(), 0);
+                            return 0;
+                        }
+                    }
+                } else if wparam as usize == VK_DELETE as usize {
+                    let mut q = SEARCH_QUERY.lock().unwrap();
+                    q.clear();
+                    drop(q);
+                    SCROLL_Y.store(0, Ordering::SeqCst);
+                    TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+                    InvalidateRect(hwnd, null_mut(), 0);
+                    return 0;
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_CHAR => {
             let page = CURRENT_PAGE.load(Ordering::SeqCst);
-            if page == 5 && BROWSER_INPUT_FOCUSED.load(Ordering::SeqCst) {
+            if page == 0 && SEARCH_FOCUSED.load(Ordering::SeqCst) {
+                let ch_code = wparam as u16;
+                if ch_code == 0x08 { // Backspace
+                    let mut q = SEARCH_QUERY.lock().unwrap();
+                    q.pop();
+                    drop(q);
+                    SCROLL_Y.store(0, Ordering::SeqCst);
+                    TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+                    InvalidateRect(hwnd, null_mut(), 0);
+                    return 0;
+                } else if ch_code == 0x7F { // Ctrl + Backspace
+                    let mut q = SEARCH_QUERY.lock().unwrap();
+                    q.clear();
+                    drop(q);
+                    SCROLL_Y.store(0, Ordering::SeqCst);
+                    TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+                    InvalidateRect(hwnd, null_mut(), 0);
+                    return 0;
+                } else if ch_code == 0x0D || ch_code == 0x1B { // Enter or Esc
+                    if ch_code == 0x1B {
+                        let mut q = SEARCH_QUERY.lock().unwrap();
+                        q.clear();
+                    }
+                    SEARCH_FOCUSED.store(false, Ordering::SeqCst);
+                    SCROLL_Y.store(0, Ordering::SeqCst);
+                    TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+                    InvalidateRect(hwnd, null_mut(), 0);
+                    return 0;
+                } else if ch_code >= 32 {
+                    if let Some(ch) = char::from_u32(ch_code as u32) {
+                        let mut q = SEARCH_QUERY.lock().unwrap();
+                        if q.chars().count() < 40 {
+                            q.push(ch);
+                        }
+                        drop(q);
+                        SCROLL_Y.store(0, Ordering::SeqCst);
+                        TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+                        InvalidateRect(hwnd, null_mut(), 0);
+                        return 0;
+                    }
+                }
+            } else if page == 5 && BROWSER_INPUT_FOCUSED.load(Ordering::SeqCst) {
                 let ch_code = wparam as u16;
                 let mut state = GLOBAL_STATE.lock().unwrap();
                 if ch_code == 0x08 { // Backspace
@@ -629,7 +1143,22 @@ unsafe extern "system" fn settings_wnd_proc(
 
 fn get_max_scroll_for_page(page: u8) -> i32 {
     match page {
-        0 => 80,
+        0 => {
+            let (has_query, count) = {
+                let q = SEARCH_QUERY.lock().unwrap();
+                if q.is_empty() {
+                    (false, 0)
+                } else {
+                    (true, get_filtered_search_items(&q).len())
+                }
+            };
+            if !has_query {
+                80
+            } else {
+                let total_bottom = 140 + (count as i32) * 74 + 20;
+                (total_bottom - 570).max(0)
+            }
+        }
         1 => 118,
         2 => {
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
@@ -704,29 +1233,63 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
         let scroll_y = SCROLL_Y.load(Ordering::SeqCst);
         let y_content = y + scroll_y;
 
-        // Status Card: y = 86..158
-        if x >= card_x && x <= card_right && y_content >= 86 && y_content <= 158 {
-            return 10;
+        let has_query = {
+            if let std::result::Result::Ok(q) = SEARCH_QUERY.try_lock() {
+                !q.is_empty()
+            } else {
+                false
+            }
+        };
+
+        // Search Bar (y = 62..102)
+        if y_content >= 62 && y_content <= 102 && x >= card_x && x <= card_right {
+            if has_query && x >= card_right - 36 {
+                return 101; // Nút clear 'x'
+            }
+            return 100; // Khung tìm kiếm
         }
-        // Menu item 1: Cài đặt đánh máy: y = 212..274
-        if x >= card_x && x <= card_right && y_content >= 212 && y_content <= 274 {
-            return 11;
-        }
-        // Menu item 2: Hỗ trợ viết: y = 286..348
-        if x >= card_x && x <= card_right && y_content >= 286 && y_content <= 348 {
-            return 14;
-        }
-        // Menu item 3: Nâng cao: y = 360..422 (ngay trên Cài đặt HoyuKey)
-        if x >= card_x && x <= card_right && y_content >= 360 && y_content <= 422 {
-            return 15;
-        }
-        // Menu item 4: Cài đặt HoyuKey: y = 434..496
-        if x >= card_x && x <= card_right && y_content >= 434 && y_content <= 496 {
-            return 12;
-        }
-        // Menu item 5: Giới thiệu: y = 508..570
-        if x >= card_x && x <= card_right && y_content >= 508 && y_content <= 570 {
-            return 13;
+
+        if !has_query {
+            // Status Card: y = 114..186
+            if x >= card_x && x <= card_right && y_content >= 114 && y_content <= 186 {
+                return 10;
+            }
+            // Menu item 1: Cài đặt đánh máy: y = 238..300
+            if x >= card_x && x <= card_right && y_content >= 238 && y_content <= 300 {
+                return 11;
+            }
+            // Menu item 2: Hỗ trợ viết: y = 312..374
+            if x >= card_x && x <= card_right && y_content >= 312 && y_content <= 374 {
+                return 14;
+            }
+            // Menu item 3: Nâng cao: y = 386..448
+            if x >= card_x && x <= card_right && y_content >= 386 && y_content <= 448 {
+                return 15;
+            }
+            // Menu item 4: Cài đặt HoyuKey: y = 460..522
+            if x >= card_x && x <= card_right && y_content >= 460 && y_content <= 522 {
+                return 12;
+            }
+            // Menu item 5: Giới thiệu: y = 534..596
+            if x >= card_x && x <= card_right && y_content >= 534 && y_content <= 596 {
+                return 13;
+            }
+        } else {
+            let query = {
+                if let std::result::Result::Ok(q) = SEARCH_QUERY.try_lock() {
+                    q.clone()
+                } else {
+                    String::new()
+                }
+            };
+            let results = get_filtered_search_items(&query);
+            if y_content >= 140 {
+                let idx = ((y_content - 140) / 74) as usize;
+                let card_top = 140 + idx as i32 * 74;
+                if idx < results.len() && y_content <= card_top + 62 && x >= card_x && x <= card_right {
+                    return 1000 + idx as i32;
+                }
+            }
         }
     } else {
         // --- CÁC TRANG CON ---
@@ -926,38 +1489,83 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
         let scroll_y = SCROLL_Y.load(Ordering::SeqCst);
         let y_content = y + scroll_y;
 
-        // --- XỬ LÝ TRANG CHỦ ---
-        if x >= card_x && x <= card_right && y_content >= 86 && y_content <= 158 {
-            crate::hook::toggle_vietnamese_mode();
-            unsafe {
-                InvalidateRect(hwnd, null_mut(), 0);
+        let has_query = {
+            let q = SEARCH_QUERY.lock().unwrap();
+            !q.is_empty()
+        };
+
+        // 1. Kiểm tra thanh search (y = 62..102)
+        if y_content >= 62 && y_content <= 102 && x >= card_x && x <= card_right {
+            if has_query && x >= card_right - 36 {
+                let mut q = SEARCH_QUERY.lock().unwrap();
+                q.clear();
+                drop(q);
+                SEARCH_FOCUSED.store(true, Ordering::SeqCst);
+                SCROLL_Y.store(0, Ordering::SeqCst);
+                TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+                unsafe { InvalidateRect(hwnd, null_mut(), 0); }
+                return;
+            } else {
+                SEARCH_FOCUSED.store(true, Ordering::SeqCst);
+                unsafe { InvalidateRect(hwnd, null_mut(), 0); }
+                return;
             }
-            return;
         }
 
-        if x >= card_x && x <= card_right && y_content >= 212 && y_content <= 274 {
-            start_page_transition(hwnd, 1, 1);
-            return;
+        if !has_query {
+            // --- XỬ LÝ TRANG CHỦ MẶC ĐỊNH ---
+            if x >= card_x && x <= card_right && y_content >= 114 && y_content <= 186 {
+                crate::hook::toggle_vietnamese_mode();
+                unsafe {
+                    InvalidateRect(hwnd, null_mut(), 0);
+                }
+                return;
+            }
+
+            if x >= card_x && x <= card_right && y_content >= 238 && y_content <= 300 {
+                start_page_transition(hwnd, 1, 1);
+                return;
+            }
+
+            if x >= card_x && x <= card_right && y_content >= 312 && y_content <= 374 {
+                start_page_transition(hwnd, 4, 1);
+                return;
+            }
+
+            if x >= card_x && x <= card_right && y_content >= 386 && y_content <= 448 {
+                start_page_transition(hwnd, 5, 1);
+                return;
+            }
+
+            if x >= card_x && x <= card_right && y_content >= 460 && y_content <= 522 {
+                start_page_transition(hwnd, 2, 1);
+                return;
+            }
+
+            if x >= card_x && x <= card_right && y_content >= 534 && y_content <= 596 {
+                start_page_transition(hwnd, 3, 1);
+                return;
+            }
+        } else {
+            // --- XỬ LÝ CLICK CÁC MỤC KẾT QUẢ TÌM KIẾM ---
+            let query = {
+                let q = SEARCH_QUERY.lock().unwrap();
+                q.clone()
+            };
+            let results = get_filtered_search_items(&query);
+            if y_content >= 140 {
+                let idx = ((y_content - 140) / 74) as usize;
+                let card_top = 140 + idx as i32 * 74;
+                if idx < results.len() && y_content <= card_top + 62 && x >= card_x && x <= card_right {
+                    handle_search_item_click(results[idx].id, hwnd);
+                    return;
+                }
+            }
         }
 
-        if x >= card_x && x <= card_right && y_content >= 286 && y_content <= 348 {
-            start_page_transition(hwnd, 4, 1);
-            return;
-        }
-
-        if x >= card_x && x <= card_right && y_content >= 360 && y_content <= 422 {
-            start_page_transition(hwnd, 5, 1);
-            return;
-        }
-
-        if x >= card_x && x <= card_right && y_content >= 434 && y_content <= 496 {
-            start_page_transition(hwnd, 2, 1);
-            return;
-        }
-
-        if x >= card_x && x <= card_right && y_content >= 508 && y_content <= 570 {
-            start_page_transition(hwnd, 3, 1);
-            return;
+        // Bỏ focus thanh search nếu click ra ngoài
+        if SEARCH_FOCUSED.swap(false, Ordering::SeqCst) {
+            unsafe { InvalidateRect(hwnd, null_mut(), 0); }
         }
     } else {
         // --- XỬ LÝ CÁC TRANG CON ---
@@ -1569,94 +2177,192 @@ unsafe fn render_page_elements(
         // 🏠 TRANG CHỦ (HOME DASHBOARD) - CÓ THỂ CUỘN CHUỘT MƯỢT MÀ
         // ========================================================
 
+        // 1. Header tinh gọn: "Xin chào, [username]!"
+        let username = get_current_username();
+        let greeting = format!("Xin chào, {}!", username);
+        draw_gdip_text(graphics, font_title, &greeting, card_x, 20 - sy, ARGB_TEXT_PRIMARY, false);
 
-        // 1. Header tinh gọn: Logo 48x48 + Tiêu đề "DASHBOARD"
-        gdiplus_draw_image(graphics, card_x, 22 - sy, 48, 48, LOGO_BGRA_128, 128, 128);
-        draw_gdip_text(graphics, font_title, "DASHBOARD", card_x + 60, 26 - sy, ARGB_TEXT_PRIMARY, false);
-
-        // 2. Card Trạng thái hệ thống (y = 86..158, cao 72px)
-        let mode_p = MODE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
-        let mode_ease = 1.0 - (1.0 - mode_p).powi(3);
-
-        let status_bg = if hover_id == 10 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 86 - sy, card_w, 72, 10, status_bg, ARGB_CARD_BORDER, 1.0);
-
-        // Icon E và V ở vị trí bên trái (chỉ có icon thay đổi với animation mượt mà)
-        let icon_x = left_text;
-        let icon_y = 104 - sy;
-        let icon_size = 36;
-
-        gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, E_BGRA_32, 32, 32, 1.0 - mode_ease);
-        gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, V_BGRA_32, 32, 32, mode_ease);
-
-        // Tiêu đề & mô tả trạng thái (đặt ngay bên phải icon)
-        let text_x = icon_x + icon_size + 16;
-        let status_str = if mode_ease >= 0.5 {
-            "Tiếng Việt đang bật"
-        } else {
-            "Tiếng Việt đang tắt"
+        // 2. Thanh Search (y = 62..102, h = 40)
+        let is_search_focused = SEARCH_FOCUSED.load(Ordering::SeqCst);
+        let search_query = {
+            let q = SEARCH_QUERY.lock().unwrap();
+            q.clone()
         };
-        draw_gdip_text(graphics, font_bold, status_str, text_x, 100 - sy, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Bấm để đổi chế độ hoặc dùng phím tắt", text_x, 124 - sy, ARGB_TEXT_MUTED, false);
+        let has_query = !search_query.is_empty();
 
-        // 3. Tiêu đề nhóm CÀI ĐẶT (cách status card 26px, cách Card 1 28px - không còn bị dính sát!)
-        draw_gdip_text(graphics, font_section, "CÀI ĐẶT", card_x + 4, 184 - sy, ARGB_STATUS_MUTED, false);
+        let search_y = 62 - sy;
+        let search_h = 40;
+        let search_bg = if is_search_focused { 0xFF242428 } else { 0xFF1C1C1F };
+        let search_border = if is_search_focused { ARGB_WHITE } else { ARGB_CARD_BORDER };
 
-        // 4. Menu item 1: Cài đặt đánh máy (y = 212..274, h = 62)
-        let menu1_bg = if hover_id == 11 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 212 - sy, card_w, 62, 10, menu1_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 223 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_keyboard_icon(graphics, left_text + 20, 243 - sy, ARGB_TEXT_PRIMARY);
+        gdiplus_draw_rounded_card(graphics, card_x, search_y, card_w, search_h, 8, search_bg, search_border, 1.0);
 
-        draw_gdip_text(graphics, font_bold, "Cài đặt đánh máy", left_text + 52, 222 - sy, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Kiểu gõ, bỏ dấu tự do, nhận diện tiếng Anh", left_text + 52, 246 - sy, ARGB_TEXT_MUTED, false);
-        let arrow1_color = if hover_id == 11 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 243 - sy, arrow1_color);
+        // Vector Search Icon
+        let search_icon_color = if is_search_focused { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+        draw_vector_search_icon(graphics, card_x + 20, search_y + 20, search_icon_color);
 
-        // 5. Menu item 2: Hỗ trợ viết (y = 286..348, h = 62)
-        let menu2_bg = if hover_id == 14 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 286 - sy, card_w, 62, 10, menu2_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 297 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_pen_icon(graphics, left_text + 20, 317 - sy, ARGB_TEXT_PRIMARY);
+        // Text or Placeholder
+        let text_input_x = card_x + 38;
+        let text_input_y = search_y + 11;
+        if !has_query {
+            let display = if is_search_focused { "|" } else { "Tìm kiếm cài đặt, tính năng..." };
+            draw_gdip_text(graphics, font_desc, display, text_input_x, text_input_y, ARGB_TEXT_MUTED, false);
+        } else {
+            let display = if is_search_focused {
+                format!("{}|", search_query)
+            } else {
+                search_query.clone()
+            };
+            draw_gdip_text(graphics, font_bold, &display, text_input_x, text_input_y, ARGB_TEXT_PRIMARY, false);
 
-        draw_gdip_text(graphics, font_bold, "Hỗ trợ viết", left_text + 52, 296 - sy, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Viết hoa đầu dòng, sau dấu chấm, tự thêm chấm", left_text + 52, 320 - sy, ARGB_TEXT_MUTED, false);
-        let arrow2_color = if hover_id == 14 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 317 - sy, arrow2_color);
+            // Nút Clear "✕"
+            let clear_btn_x = card_x + card_w - 22;
+            let clear_color = if hover_id == 101 { ARGB_WHITE } else { ARGB_TEXT_MUTED };
+            draw_vector_close_icon(graphics, clear_btn_x, search_y + 20, clear_color);
+        }
 
-        // 6. Menu item 3: Nâng cao (y = 360..422, h = 62)
-        let menu_adv_bg = if hover_id == 15 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 360 - sy, card_w, 62, 10, menu_adv_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 371 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_gear_icon(graphics, left_text + 20, 391 - sy, ARGB_TEXT_PRIMARY);
+        if !has_query {
+            // 3. Card Trạng thái hệ thống (y = 114..186, cao 72px)
+            let mode_p = MODE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            let mode_ease = 1.0 - (1.0 - mode_p).powi(3);
 
-        draw_gdip_text(graphics, font_bold, "Nâng cao", left_text + 52, 370 - sy, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Tương thích trình duyệt và các ứng dụng", left_text + 52, 394 - sy, ARGB_TEXT_MUTED, false);
-        let arrow_adv_color = if hover_id == 15 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 391 - sy, arrow_adv_color);
+            let status_bg = if hover_id == 10 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+            gdiplus_draw_rounded_card(graphics, card_x, 114 - sy, card_w, 72, 10, status_bg, ARGB_CARD_BORDER, 1.0);
 
-        // 7. Menu item 4: Cài đặt HoyuKey (y = 434..496, h = 62)
-        let menu3_bg = if hover_id == 12 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 434 - sy, card_w, 62, 10, menu3_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 445 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_sliders_icon(graphics, left_text + 20, 465 - sy, ARGB_TEXT_PRIMARY);
+            // Icon E và V ở vị trí bên trái (chỉ có icon thay đổi với animation mượt mà)
+            let icon_x = left_text;
+            let icon_y = 132 - sy;
+            let icon_size = 36;
 
-        draw_gdip_text(graphics, font_bold, "Cài đặt HoyuKey", left_text + 52, 444 - sy, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Phím tắt chuyển đổi, khởi động cùng máy", left_text + 52, 468 - sy, ARGB_TEXT_MUTED, false);
-        let arrow3_color = if hover_id == 12 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 465 - sy, arrow3_color);
+            gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, E_BGRA_32, 32, 32, 1.0 - mode_ease);
+            gdiplus_draw_image_alpha(graphics, icon_x, icon_y, icon_size, icon_size, V_BGRA_32, 32, 32, mode_ease);
 
-        // 8. Menu item 5: Giới thiệu (y = 508..570, h = 62)
-        let menu4_bg = if hover_id == 13 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
-        gdiplus_draw_rounded_card(graphics, card_x, 508 - sy, card_w, 62, 10, menu4_bg, ARGB_CARD_BORDER, 1.0);
-        gdiplus_draw_rounded_card(graphics, left_text, 519 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
-        draw_vector_info_icon(graphics, left_text + 20, 539 - sy, ARGB_TEXT_PRIMARY);
+            // Tiêu đề & mô tả trạng thái (đặt ngay bên phải icon)
+            let text_x = icon_x + icon_size + 16;
+            let status_str = if mode_ease >= 0.5 {
+                "Tiếng Việt đang bật"
+            } else {
+                "Tiếng Việt đang tắt"
+            };
+            draw_gdip_text(graphics, font_bold, status_str, text_x, 128 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Bấm để đổi chế độ hoặc dùng phím tắt", text_x, 152 - sy, ARGB_TEXT_MUTED, false);
 
-        draw_gdip_text(graphics, font_bold, "Giới thiệu", left_text + 52, 518 - sy, ARGB_TEXT_PRIMARY, false);
-        draw_gdip_text(graphics, font_desc, "Phiên bản, kiểm tra cập nhật và nhật ký", left_text + 52, 542 - sy, ARGB_TEXT_MUTED, false);
-        let arrow4_color = if hover_id == 13 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
-        draw_vector_chevron_right(graphics, right_ctrl - 12, 539 - sy, arrow4_color);
+            // 4. Tiêu đề nhóm CÀI ĐẶT
+            draw_gdip_text(graphics, font_section, "CÀI ĐẶT", card_x + 4, 212 - sy, ARGB_STATUS_MUTED, false);
 
+            // 5. Menu item 1: Cài đặt đánh máy (y = 238..300, h = 62)
+            let menu1_bg = if hover_id == 11 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+            gdiplus_draw_rounded_card(graphics, card_x, 238 - sy, card_w, 62, 10, menu1_bg, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, left_text, 249 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+            draw_vector_keyboard_icon(graphics, left_text + 20, 269 - sy, ARGB_TEXT_PRIMARY);
+
+            draw_gdip_text(graphics, font_bold, "Cài đặt đánh máy", left_text + 52, 248 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Kiểu gõ, bỏ dấu tự do, nhận diện tiếng Anh", left_text + 52, 272 - sy, ARGB_TEXT_MUTED, false);
+            let arrow1_color = if hover_id == 11 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+            draw_vector_chevron_right(graphics, right_ctrl - 12, 269 - sy, arrow1_color);
+
+            // 6. Menu item 2: Hỗ trợ viết (y = 312..374, h = 62)
+            let menu2_bg = if hover_id == 14 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+            gdiplus_draw_rounded_card(graphics, card_x, 312 - sy, card_w, 62, 10, menu2_bg, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, left_text, 323 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+            draw_vector_pen_icon(graphics, left_text + 20, 343 - sy, ARGB_TEXT_PRIMARY);
+
+            draw_gdip_text(graphics, font_bold, "Hỗ trợ viết", left_text + 52, 322 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Viết hoa đầu dòng, sau dấu chấm, tự thêm chấm", left_text + 52, 346 - sy, ARGB_TEXT_MUTED, false);
+            let arrow2_color = if hover_id == 14 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+            draw_vector_chevron_right(graphics, right_ctrl - 12, 343 - sy, arrow2_color);
+
+            // 7. Menu item 3: Nâng cao (y = 386..448, h = 62)
+            let menu_adv_bg = if hover_id == 15 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+            gdiplus_draw_rounded_card(graphics, card_x, 386 - sy, card_w, 62, 10, menu_adv_bg, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, left_text, 397 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+            draw_vector_gear_icon(graphics, left_text + 20, 417 - sy, ARGB_TEXT_PRIMARY);
+
+            draw_gdip_text(graphics, font_bold, "Nâng cao", left_text + 52, 396 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Tương thích trình duyệt và các ứng dụng", left_text + 52, 420 - sy, ARGB_TEXT_MUTED, false);
+            let arrow_adv_color = if hover_id == 15 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+            draw_vector_chevron_right(graphics, right_ctrl - 12, 417 - sy, arrow_adv_color);
+
+            // 8. Menu item 4: Cài đặt HoyuKey (y = 460..522, h = 62)
+            let menu3_bg = if hover_id == 12 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+            gdiplus_draw_rounded_card(graphics, card_x, 460 - sy, card_w, 62, 10, menu3_bg, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, left_text, 471 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+            draw_vector_sliders_icon(graphics, left_text + 20, 491 - sy, ARGB_TEXT_PRIMARY);
+
+            draw_gdip_text(graphics, font_bold, "Cài đặt HoyuKey", left_text + 52, 470 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Phím tắt chuyển đổi, khởi động cùng máy", left_text + 52, 494 - sy, ARGB_TEXT_MUTED, false);
+            let arrow3_color = if hover_id == 12 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+            draw_vector_chevron_right(graphics, right_ctrl - 12, 491 - sy, arrow3_color);
+
+            // 9. Menu item 5: Giới thiệu (y = 534..596, h = 62)
+            let menu4_bg = if hover_id == 13 { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+            gdiplus_draw_rounded_card(graphics, card_x, 534 - sy, card_w, 62, 10, menu4_bg, ARGB_CARD_BORDER, 1.0);
+            gdiplus_draw_rounded_card(graphics, left_text, 545 - sy, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+            draw_vector_info_icon(graphics, left_text + 20, 565 - sy, ARGB_TEXT_PRIMARY);
+
+            draw_gdip_text(graphics, font_bold, "Giới thiệu", left_text + 52, 544 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Phiên bản, kiểm tra cập nhật và nhật ký", left_text + 52, 568 - sy, ARGB_TEXT_MUTED, false);
+            let arrow4_color = if hover_id == 13 { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+            draw_vector_chevron_right(graphics, right_ctrl - 12, 565 - sy, arrow4_color);
+        } else {
+            // Render Search Results:
+            let results = get_filtered_search_items(&search_query);
+            let result_title = format!("KẾT QUẢ TÌM KIẾM ({})", results.len());
+            draw_gdip_text(graphics, font_section, &result_title, card_x + 4, 114 - sy, ARGB_STATUS_MUTED, false);
+
+            if results.is_empty() {
+                let no_res_text = format!("Không tìm thấy cài đặt phù hợp với \"{}\"", search_query);
+                draw_gdip_text(graphics, font_bold, &no_res_text, card_x + 4, 148 - sy, ARGB_TEXT_PRIMARY, false);
+                draw_gdip_text(graphics, font_desc, "Gợi ý: telex, vni, dấu, hoa, ram, trình duyệt, khởi động...", card_x + 4, 176 - sy, ARGB_TEXT_MUTED, false);
+            } else {
+                for (idx, item) in results.iter().enumerate() {
+                    let item_y = 140 + (idx as i32) * 74 - sy;
+                    let is_item_hovered = hover_id == 1000 + idx as i32;
+                    let item_bg = if is_item_hovered { ARGB_CARD_HOVER } else { ARGB_CARD_BG };
+
+                    gdiplus_draw_rounded_card(graphics, card_x, item_y, card_w, 62, 10, item_bg, ARGB_CARD_BORDER, 1.0);
+
+                    // Category icon
+                    gdiplus_draw_rounded_card(graphics, left_text, item_y + 11, 40, 40, 20, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+                    match item.category {
+                        "Cài đặt đánh máy" => draw_vector_keyboard_icon(graphics, left_text + 20, item_y + 31, ARGB_TEXT_PRIMARY),
+                        "Hỗ trợ viết" => draw_vector_pen_icon(graphics, left_text + 20, item_y + 31, ARGB_TEXT_PRIMARY),
+                        "Nâng cao" => draw_vector_gear_icon(graphics, left_text + 20, item_y + 31, ARGB_TEXT_PRIMARY),
+                        "Cài đặt HoyuKey" => draw_vector_sliders_icon(graphics, left_text + 20, item_y + 31, ARGB_TEXT_PRIMARY),
+                        _ => draw_vector_info_icon(graphics, left_text + 20, item_y + 31, ARGB_TEXT_PRIMARY),
+                    }
+
+                    // Title & Description
+                    draw_gdip_text(graphics, font_bold, item.title, left_text + 52, item_y + 10, ARGB_TEXT_PRIMARY, false);
+                    let sub = format!("{} • {}", item.category, item.desc);
+                    draw_gdip_text(graphics, font_desc, &sub, left_text + 52, item_y + 34, ARGB_TEXT_MUTED, false);
+
+                    // Right control
+                    match item.kind {
+                        SearchItemKind::Toggle => {
+                            let p = get_item_toggle_progress(item.id);
+                            draw_animated_switch(graphics, right_ctrl - 50, item_y + 18, p);
+                        }
+                        SearchItemKind::InputMethodPill => {
+                            let is_vni = config.input_method == InputMethod::Vni;
+                            let pill_text = if is_vni { "VNI" } else { "Telex" };
+                            gdiplus_draw_rounded_card(graphics, right_ctrl - 68, item_y + 16, 68, 30, 15, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+                            draw_gdip_text_centered(graphics, font_btn, pill_text, right_ctrl - 68, item_y + 16, 68, 30, ARGB_TEXT_PRIMARY);
+                        }
+                        SearchItemKind::SwitchKeyPill => {
+                            let is_alt_z = config.switch_key == SwitchKey::AltZ;
+                            let pill_text = if is_alt_z { "Alt+Z" } else { "Ctrl+Shift" };
+                            gdiplus_draw_rounded_card(graphics, right_ctrl - 84, item_y + 16, 84, 30, 15, ARGB_PILL_TRACK, ARGB_CARD_BORDER, 1.0);
+                            draw_gdip_text_centered(graphics, font_btn, pill_text, right_ctrl - 84, item_y + 16, 84, 30, ARGB_TEXT_PRIMARY);
+                        }
+                        SearchItemKind::Action(_) => {
+                            let arrow_color = if is_item_hovered { ARGB_TEXT_PRIMARY } else { ARGB_TEXT_MUTED };
+                            draw_vector_chevron_right(graphics, right_ctrl - 12, item_y + 31, arrow_color);
+                        }
+                    }
+                }
+            }
+        }
     } else {
         // ========================================================
         // 📱 CÁC TRANG CON (SUBPAGES) - CÁC THÀNH PHẦN CUỘN NẰM PHÍA SAU
@@ -2244,6 +2950,45 @@ unsafe fn draw_vector_info_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, col
     GdipDrawLine(graphics, pen, fx, fy - 1.5, fx, fy + 4.5);
 
     GdipDeleteBrush(brush as *mut GpBrush);
+    GdipDeletePen(pen);
+}
+
+unsafe fn draw_vector_search_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
+    let fx = cx as f32;
+    let fy = cy as f32;
+
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, 1.8, UnitPixel, &mut pen);
+    if pen.is_null() {
+        return;
+    }
+    GdipSetPenStartCap(pen, LineCapRound);
+    GdipSetPenEndCap(pen, LineCapRound);
+
+    // Kính lúp: Vòng tròn bán kính ~5.0px (tâm hơi lệch lên góc trái)
+    GdipDrawEllipse(graphics, pen, fx - 7.0, fy - 7.0, 10.0, 10.0);
+    // Cán kính: Đường chéo xiên 45 độ góc dưới phải
+    GdipDrawLine(graphics, pen, fx + 1.0, fy + 1.0, fx + 6.0, fy + 6.0);
+
+    GdipDeletePen(pen);
+}
+
+unsafe fn draw_vector_close_icon(graphics: *mut GpGraphics, cx: i32, cy: i32, color_argb: u32) {
+    let fx = cx as f32;
+    let fy = cy as f32;
+
+    let mut pen: *mut GpPen = null_mut();
+    GdipCreatePen1(color_argb, 1.6, UnitPixel, &mut pen);
+    if pen.is_null() {
+        return;
+    }
+    GdipSetPenStartCap(pen, LineCapRound);
+    GdipSetPenEndCap(pen, LineCapRound);
+
+    let r = 4.0;
+    GdipDrawLine(graphics, pen, fx - r, fy - r, fx + r, fy + r);
+    GdipDrawLine(graphics, pen, fx + r, fy - r, fx - r, fy + r);
+
     GdipDeletePen(pen);
 }
 
