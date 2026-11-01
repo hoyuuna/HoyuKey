@@ -1022,7 +1022,7 @@ pub fn init_caret_replacement_worker() {
 }
 
 unsafe fn get_clipboard_text() -> Option<String> {
-    for _ in 0..6 {
+    for _ in 0..8 {
         if OpenClipboard(null_mut()) != 0 {
             let handle = GetClipboardData(CF_UNICODETEXT);
             if !handle.is_null() {
@@ -1041,13 +1041,13 @@ unsafe fn get_clipboard_text() -> Option<String> {
             }
             CloseClipboard();
         }
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     None
 }
 
 unsafe fn set_clipboard_text(text: &str) -> bool {
-    for _ in 0..6 {
+    for _ in 0..8 {
         if OpenClipboard(null_mut()) != 0 {
             EmptyClipboard();
             let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -1064,7 +1064,7 @@ unsafe fn set_clipboard_text(text: &str) -> bool {
             CloseClipboard();
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     false
 }
@@ -1131,7 +1131,7 @@ fn perform_post_type_selection_replacement(
         // 1. Sao lưu clipboard hiện tại của người dùng
         let old_clipboard = get_clipboard_text();
 
-        // 2. Xóa clipboard để đón dữ liệu mới
+        // 2. Xóa clipboard để đón dữ liệu mới từ ứng dụng
         if OpenClipboard(null_mut()) != 0 {
             EmptyClipboard();
             CloseClipboard();
@@ -1139,15 +1139,16 @@ fn perform_post_type_selection_replacement(
 
         // 3. Gửi Ctrl + Shift + Left để bôi đen từ vừa gõ (bao gồm cả ký tự ch vừa gõ vào)
         send_key_combo(&[VK_CONTROL, VK_SHIFT, VK_LEFT]);
-        std::thread::sleep(std::time::Duration::from_millis(8));
+        // BẮT BUỘC: Nghỉ 20ms để ứng dụng (Chrome, Discord, Word...) kịp thời cập nhật vùng chọn
+        std::thread::sleep(std::time::Duration::from_millis(20));
 
         // 4. Gửi Ctrl + C để copy từ đã bôi đen
         send_key_combo(&[VK_CONTROL, b'C' as u16]);
 
-        // 5. Chờ ứng dụng đưa dữ liệu vào clipboard (tối đa 20ms)
+        // 5. Chờ ứng dụng đưa dữ liệu vào clipboard (tối đa 60ms)
         let mut copied = None;
-        for _ in 0..10 {
-            std::thread::sleep(std::time::Duration::from_millis(2));
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
             if let Some(text) = get_clipboard_text() {
                 if !text.is_empty() {
                     copied = Some(text);
@@ -1157,11 +1158,12 @@ fn perform_post_type_selection_replacement(
         }
 
         let mut transformed_word = None;
-        if let Some(ref text) = copied {
+        if let Some(ref raw_text) = copied {
+            let trimmed_end = raw_text.trim_end();
             let ch_lower = ch.to_ascii_lowercase();
             // Chuỗi copy được phải kết thúc bằng ký tự ch vừa gõ
-            if text.ends_with(ch) || text.to_lowercase().ends_with(ch_lower) {
-                let mut chars: Vec<char> = text.chars().collect();
+            if trimmed_end.ends_with(ch) || trimmed_end.to_lowercase().ends_with(ch_lower) {
+                let mut chars: Vec<char> = trimmed_end.chars().collect();
                 if chars.len() >= 2 {
                     chars.pop(); // Bỏ ký tự ch
                     let base_word: String = chars.into_iter().collect();
@@ -1193,7 +1195,10 @@ fn perform_post_type_selection_replacement(
 
                         if let Some(new_w) = res {
                             if new_w != trimmed {
-                                transformed_word = Some(new_w);
+                                let leading_ws: String = base_word.chars().take_while(|c| c.is_whitespace()).collect();
+                                let trailing_ws: String = raw_text[trimmed_end.len()..].to_string();
+                                let final_replacement = format!("{}{}{}", leading_ws, new_w, trailing_ws);
+                                transformed_word = Some(final_replacement);
                             }
                         }
                     }
@@ -1205,16 +1210,19 @@ fn perform_post_type_selection_replacement(
             // THÀNH CÔNG: Đưa từ mới vào clipboard và gửi Ctrl + V để thay thế vùng chọn nguyên tử
             set_clipboard_text(&new_word);
             send_key_combo(&[VK_CONTROL, b'V' as u16]);
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            // BẮT BUỘC: Nghỉ 35ms để ứng dụng kịp dán văn bản mới trước khi khôi phục clipboard cũ
+            std::thread::sleep(std::time::Duration::from_millis(35));
 
             // Cập nhật engine
             if let Ok(mut state) = GLOBAL_STATE.lock() {
-                state.engine.current_word = new_word.clone();
-                state.engine.raw_keys = new_word.clone();
+                let clean = new_word.trim().to_string();
+                let len = clean.chars().count();
+                state.engine.current_word = clean.clone();
+                state.engine.raw_keys = clean.clone();
                 state.engine.has_transformed = true;
                 state.engine.has_space_before = false;
                 state.engine.at_start_of_line = false;
-                state.engine.caret_offset = Some(new_word.chars().count());
+                state.engine.caret_offset = Some(len);
             }
         } else {
             // Không phải từ cần đổi dấu: Hủy bôi đen bằng phím Right Arrow để đưa con trỏ về vị trí cũ
