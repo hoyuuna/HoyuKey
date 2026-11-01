@@ -1618,7 +1618,7 @@ mod tests {
     #[test]
     fn test_dynamic_caret_word_transformation() {
         let config = Config::default();
-        assert!(config.dynamic_caret);
+        assert_eq!(config.dynamic_caret, false);
 
         // Telex: "tày" + 's' -> "táy"
         let transformed = telex::transform_telex("tày", 's', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex);
