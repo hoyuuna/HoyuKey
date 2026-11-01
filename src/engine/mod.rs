@@ -1657,9 +1657,12 @@ mod tests {
         // tww -> tw
         engine.reset();
         assert_eq!(simulate_type(&mut engine, &config, "tww"), "tw");
-        // chuyenr -> chuyển
+        // chuyenr -> chuyẻn (dấu đặt trên e thay vì chuỷen)
         engine.reset();
-        assert_eq!(simulate_type(&mut engine, &config, "chuyenr"), "chuyển");
+        assert_eq!(simulate_type(&mut engine, &config, "chuyenr"), "chuyẻn");
+        // chuyeenr -> chuyển
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "chuyeenr"), "chuyển");
 
         // Simple Telex:
         let mut simple_config = Config::default();
@@ -1671,8 +1674,11 @@ mod tests {
         // cuawr -> cửa in simple telex
         engine.reset();
         assert_eq!(simulate_type(&mut engine, &simple_config, "cuawr"), "cửa");
-        // chuyenr -> chuyển in simple telex
+        // chuyenr -> chuyẻn in simple telex
         engine.reset();
-        assert_eq!(simulate_type(&mut engine, &simple_config, "chuyenr"), "chuyển");
+        assert_eq!(simulate_type(&mut engine, &simple_config, "chuyenr"), "chuyẻn");
+        // chuyeenr -> chuyển in simple telex
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &simple_config, "chuyeenr"), "chuyển");
     }
 }
