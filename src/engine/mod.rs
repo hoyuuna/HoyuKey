@@ -186,6 +186,16 @@ impl Engine {
 
     /// Khôi phục hoặc dọn dẹp khi bấm chuột vào chữ
     pub fn on_mouse_click(&mut self) {
+        if self.current_word.is_empty() {
+            if let Some((word, raw, transformed)) = self.last_word_before_space.clone() {
+                let len = word.chars().count();
+                self.current_word = word;
+                self.raw_keys = raw;
+                self.has_transformed = transformed;
+                self.caret_offset = Some(len);
+                return;
+            }
+        }
         self.current_word.clear();
         self.raw_keys.clear();
         self.has_transformed = false;
