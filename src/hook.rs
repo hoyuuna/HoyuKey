@@ -511,7 +511,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 smart_english,
                 simple_telex,
                 is_empty,
-                has_space_before,
+                is_after_whitespace,
                 at_start_of_line,
             ) = {
                 let state = GLOBAL_STATE.lock().unwrap();
@@ -524,13 +524,13 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     state.config.smart_english,
                     state.config.simple_telex,
                     state.engine.current_word.is_empty(),
-                    state.engine.has_space_before,
+                    state.engine.last_char_typed.map_or(false, |c| c.is_whitespace()),
                     state.engine.at_start_of_line,
                 )
             };
 
             // Kích hoạt sửa dấu tại con trỏ khi buffer trống, con trỏ ở sát chữ (KHÔNG ĐƯỢC đứng sau space, KHÔNG ĐƯỢC ở đầu dòng)
-            if enabled && dynamic_caret && is_empty && !at_start_of_line && !has_space_before {
+            if enabled && dynamic_caret && is_empty && !at_start_of_line && !is_after_whitespace {
                 let is_candidate_key = if is_telex {
                     matches!(ch, 's' | 'f' | 'r' | 'x' | 'j' | 'z' | 'a' | 'e' | 'o' | 'w' | 'd' |
                                  'S' | 'F' | 'R' | 'X' | 'J' | 'Z' | 'A' | 'E' | 'O' | 'W' | 'D')

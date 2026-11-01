@@ -204,7 +204,7 @@ impl Engine {
     pub fn on_mouse_click(&mut self) {
         self.reset();
         self.last_word_before_space = None;
-        self.has_space_before = false;
+        self.last_char_typed = None;
         self.at_start_of_line = false;
     }
 
@@ -279,7 +279,6 @@ impl Engine {
             self.saw_sentence_end_punct = false;
         }
 
-        self.has_space_before = false;
         self.has_typed_in_line = true;
         self.last_char_typed = Some(c);
         self.raw_keys.push(c);
