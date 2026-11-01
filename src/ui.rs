@@ -45,7 +45,7 @@ static SMART_ENGLISH_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static MODIFY_TONE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static SIMPLE_TELEX_PROGRESS: AtomicU32 = AtomicU32::new(0);
-static DYNAMIC_CARET_PROGRESS: AtomicU32 = AtomicU32::new(1000);
+static DYNAMIC_CARET_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
 const V_BGRA_32: &[u8] = include_bytes!("../icon/v_32.bin");
@@ -54,6 +54,8 @@ const E_BGRA_32: &[u8] = include_bytes!("../icon/e_32.bin");
 static START_WITH_WINDOWS_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static NOTIFY_STARTUP_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static NOTIFY_TOGGLE_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static UPDATE_PRERELEASE_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static AUTO_CHECK_UPDATES_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static MODE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static AUTO_CAPS_LINE_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static AUTO_CAPS_SENTENCE_PROGRESS: AtomicU32 = AtomicU32::new(0);
@@ -291,6 +293,8 @@ pub fn show_settings_window() {
         START_WITH_WINDOWS_PROGRESS.store(if state.config.start_with_windows { 1000 } else { 0 }, Ordering::SeqCst);
         NOTIFY_STARTUP_PROGRESS.store(if state.config.notify_on_startup { 1000 } else { 0 }, Ordering::SeqCst);
         NOTIFY_TOGGLE_PROGRESS.store(if state.config.notify_on_toggle { 1000 } else { 0 }, Ordering::SeqCst);
+        UPDATE_PRERELEASE_PROGRESS.store(if state.config.update_prerelease { 1000 } else { 0 }, Ordering::SeqCst);
+        AUTO_CHECK_UPDATES_PROGRESS.store(if state.config.auto_check_updates { 1000 } else { 0 }, Ordering::SeqCst);
         MODE_PROGRESS.store(if state.config.enabled { 1000 } else { 0 }, Ordering::SeqCst);
         AUTO_CAPS_LINE_PROGRESS.store(if state.config.auto_caps_line { 1000 } else { 0 }, Ordering::SeqCst);
         AUTO_CAPS_SENTENCE_PROGRESS.store(if state.config.auto_caps_sentence { 1000 } else { 0 }, Ordering::SeqCst);
@@ -314,6 +318,24 @@ pub fn show_settings_window() {
             ShowWindow(hwnd, SW_SHOW);
             ShowWindow(hwnd, SW_RESTORE);
             SetForegroundWindow(hwnd);
+            InvalidateRect(hwnd, null_mut(), 0);
+        }
+    }
+}
+
+pub fn show_settings_page(page: u8) {
+    show_settings_window();
+    let hwnd = SETTINGS_HWND.load(Ordering::SeqCst) as HWND;
+    if hwnd != null_mut() {
+        CURRENT_PAGE.store(page, Ordering::SeqCst);
+        TARGET_PAGE.store(page, Ordering::SeqCst);
+        TRANSITION_PROGRESS.store(1000, Ordering::SeqCst);
+        SCROLL_Y.store(0, Ordering::SeqCst);
+        TARGET_SCROLL_Y.store(0, Ordering::SeqCst);
+        if page == 3 {
+            crate::updater::ensure_changelog_loaded(hwnd);
+        }
+        unsafe {
             InvalidateRect(hwnd, null_mut(), 0);
         }
     }
@@ -462,6 +484,8 @@ unsafe extern "system" fn settings_wnd_proc(
                 advance_anim(if config.start_with_windows { 1000 } else { 0 }, &START_WITH_WINDOWS_PROGRESS);
                 advance_anim(if config.notify_on_startup { 1000 } else { 0 }, &NOTIFY_STARTUP_PROGRESS);
                 advance_anim(if config.notify_on_toggle { 1000 } else { 0 }, &NOTIFY_TOGGLE_PROGRESS);
+                advance_anim(if config.update_prerelease { 1000 } else { 0 }, &UPDATE_PRERELEASE_PROGRESS);
+                advance_anim(if config.auto_check_updates { 1000 } else { 0 }, &AUTO_CHECK_UPDATES_PROGRESS);
                 advance_anim(if config.auto_caps_line { 1000 } else { 0 }, &AUTO_CAPS_LINE_PROGRESS);
                 advance_anim(if config.auto_caps_sentence { 1000 } else { 0 }, &AUTO_CAPS_SENTENCE_PROGRESS);
                 advance_anim(if config.auto_period_enter { 1000 } else { 0 }, &AUTO_PERIOD_ENTER_PROGRESS);
@@ -614,6 +638,7 @@ fn get_max_scroll_for_page(page: u8) -> i32 {
             let content_bottom = 558 + extra_h;
             (content_bottom - 576).max(0)
         }
+        3 => 110,
         _ => 0,
     }
 }
@@ -789,6 +814,14 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
             let btn_update_h = 42;
             if x >= btn_update_x && x <= btn_update_x + btn_update_w && y_content >= btn_update_y && y_content <= btn_update_y + btn_update_h {
                 return 25;
+            }
+            if x >= right_ctrl - 52 && x <= right_ctrl {
+                if y_content >= 326 && y_content <= 370 {
+                    return 26; // Cập nhật cả bản thử nghiệm
+                }
+                if y_content >= 398 && y_content <= 442 {
+                    return 27; // Tự động kiểm tra cập nhật
+                }
             }
         } else if page == 4 {
             // Hỗ trợ viết:
@@ -1050,6 +1083,15 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                 drop(state);
                 crate::updater::start_checking_update(hwnd);
                 return;
+            }
+            if x >= right_ctrl - 52 && x <= right_ctrl {
+                if y_content >= 326 && y_content <= 370 {
+                    state.config.update_prerelease = !state.config.update_prerelease;
+                    changed = true;
+                } else if y_content >= 398 && y_content <= 442 {
+                    state.config.auto_check_updates = !state.config.auto_check_updates;
+                    changed = true;
+                }
             }
         } else if page == 4 {
             // Hỗ trợ viết
@@ -1828,8 +1870,26 @@ unsafe fn render_page_elements(
             gdiplus_draw_rounded_card(graphics, btn_update_x, btn_update_y, btn_update_w, btn_update_h, 8, update_btn_bg, ARGB_WHITE, 1.0);
             draw_gdip_text_centered(graphics, font_btn, "Kiểm tra cập nhật", btn_update_x, btn_update_y, btn_update_w, btn_update_h, ARGB_TEXT_DARK);
 
-            // Card 2: Changelog Nhật ký thay đổi (Lấy động trực tiếp từ GitHub Releases)
-            let cl_y = 316 - sy;
+            // Card 2: Cài đặt cập nhật (2 công tắc)
+            let opt_y = 316 - sy;
+            gdiplus_draw_rounded_card(graphics, card_x, opt_y, card_w, 144, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+
+            // 1. Cập nhật cả bản thử nghiệm
+            draw_gdip_text(graphics, font_bold, "Cập nhật cả bản thử nghiệm", left_text, opt_y + 14, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Bao gồm cả các bản thử nghiệm (pre-release) sớm nhất", left_text, opt_y + 38, ARGB_TEXT_MUTED, false);
+            let prerelease_p = UPDATE_PRERELEASE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, opt_y + 20, prerelease_p);
+
+            gdiplus_draw_line(graphics, left_text, opt_y + 72, right_ctrl, opt_y + 72, ARGB_DIVIDER, 1.0);
+
+            // 2. Tự động kiểm tra cập nhật
+            draw_gdip_text(graphics, font_bold, "Tự động kiểm tra cập nhật", left_text, opt_y + 86, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Kiểm tra và thông báo phiên bản mới khi khởi động app", left_text, opt_y + 110, ARGB_TEXT_MUTED, false);
+            let auto_check_p = AUTO_CHECK_UPDATES_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, opt_y + 92, auto_check_p);
+
+            // Card 3: Changelog Nhật ký thay đổi (Lấy động trực tiếp từ GitHub Releases)
+            let cl_y = 472 - sy;
             let cl_h = 244;
             gdiplus_draw_rounded_card(graphics, card_x, cl_y, card_w, cl_h, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
             draw_gdip_text(graphics, font_section, "NHẬT KÝ THAY ĐỔI", left_text, cl_y + 16, ARGB_STATUS_MUTED, false);

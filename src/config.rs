@@ -54,6 +54,10 @@ pub struct Config {
     pub notify_on_startup: bool,
     /// Thông báo chuyển ngôn ngữ (mặc định false: "Đã bật/tắt Tiếng Việt")
     pub notify_on_toggle: bool,
+    /// Cập nhật cả bản thử nghiệm (pre-release) (mặc định false)
+    pub update_prerelease: bool,
+    /// Tự động kiểm tra cập nhật mỗi lần bật app (mặc định true)
+    pub auto_check_updates: bool,
 }
 
 impl Default for Config {
@@ -68,7 +72,7 @@ impl Default for Config {
             smart_english: true,
             modify_tone_in_word: true,
             simple_telex: false,
-            dynamic_caret: true,
+            dynamic_caret: false,
             start_with_windows: false,
             auto_caps_line: false,
             auto_caps_sentence: false,
@@ -80,6 +84,8 @@ impl Default for Config {
             max_ram_mb: 1,
             notify_on_startup: true,
             notify_on_toggle: false,
+            update_prerelease: false,
+            auto_check_updates: true,
         }
     }
 }
@@ -167,7 +173,7 @@ impl Config {
     pub fn to_json_string(&self) -> String {
         let escaped_browser_apps = self.browser_apps.replace('\\', "\\\\").replace('"', "\\\"");
         format!(
-            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"simple_telex\": {},\n  \"dynamic_caret\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {},\n  \"limit_ram\": {},\n  \"max_ram_mb\": {},\n  \"notify_on_startup\": {},\n  \"notify_on_toggle\": {}\n}}\n",
+            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"simple_telex\": {},\n  \"dynamic_caret\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {},\n  \"limit_ram\": {},\n  \"max_ram_mb\": {},\n  \"notify_on_startup\": {},\n  \"notify_on_toggle\": {},\n  \"update_prerelease\": {},\n  \"auto_check_updates\": {}\n}}\n",
             self.enabled,
             match self.input_method {
                 InputMethod::Telex => "Telex",
@@ -195,6 +201,8 @@ impl Config {
             self.max_ram_mb,
             self.notify_on_startup,
             self.notify_on_toggle,
+            self.update_prerelease,
+            self.auto_check_updates,
         )
     }
 
@@ -238,6 +246,8 @@ impl Config {
                 }
                 "notify_on_startup" => self.notify_on_startup = val == "true",
                 "notify_on_toggle" => self.notify_on_toggle = val == "true",
+                "update_prerelease" => self.update_prerelease = val == "true",
+                "auto_check_updates" => self.auto_check_updates = val == "true",
                 // Tương thích ngược: Bỏ qua các trường lạ/chưa hỗ trợ mà không làm hỏng cấu hình
                 _ => {}
             }
@@ -342,6 +352,8 @@ mod tests {
         assert_eq!(config.max_ram_mb, 1);
         assert_eq!(config.notify_on_startup, true);
         assert_eq!(config.notify_on_toggle, false);
+        assert_eq!(config.update_prerelease, false);
+        assert_eq!(config.auto_check_updates, true);
     }
 
     #[test]

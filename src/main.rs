@@ -162,6 +162,19 @@ fn main() {
         show_notification("HoyuKey", "HoyuKey đã kích hoạt và sẵn sàng!");
     }
 
+    // Tự động kiểm tra cập nhật nếu được cấu hình (mặc định bật)
+    // Chờ thông báo khởi động hoàn tất (3.5 giây) rồi mới kiểm tra và hiển thị thông báo nếu có phiên bản mới
+    let should_auto_check = {
+        let state = GLOBAL_STATE.lock().unwrap();
+        state.config.auto_check_updates
+    };
+    if should_auto_check {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(3500));
+            crate::updater::check_update_silent();
+        });
+    }
+
     // 6. Vòng lặp tin nhắn Windows (Message Loop)
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     unsafe {
@@ -203,6 +216,10 @@ unsafe extern "system" fn tray_wnd_proc(
                     if let Some(tray) = TRAY_MANAGER.lock().unwrap().as_ref() {
                         tray.show_context_menu(&config);
                     }
+                }
+                0x0405 => {
+                    // NIN_BALLOONUSERCLICK: Người dùng bấm vào thông báo Windows
+                    crate::ui::show_settings_page(3);
                 }
                 _ => {}
             }

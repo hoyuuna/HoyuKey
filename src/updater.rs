@@ -97,10 +97,15 @@ pub fn start_checking_update(hwnd: HWND) {
                     *CHANGELOG_BODY.lock().unwrap() = rel.body.clone();
                 }
 
-                // Chỉ thông báo cập nhật đối với các bản phát hành chính thức (không phải pre-release)
-                let official_release = releases.iter().find(|r| !r.is_prerelease);
+                // Kiểm tra bản phát hành phù hợp (bao gồm cả pre-release nếu người dùng bật tùy chọn)
+                let update_prerelease = crate::GLOBAL_STATE.lock().unwrap().config.update_prerelease;
+                let target_release = if update_prerelease {
+                    releases.first()
+                } else {
+                    releases.iter().find(|r| !r.is_prerelease)
+                };
 
-                if let Some(rel) = official_release {
+                if let Some(rel) = target_release {
                     let clean_latest = rel.tag_name.trim_start_matches('v').trim();
                     let clean_current = CURRENT_VERSION.trim_start_matches('v').trim();
 
@@ -112,7 +117,7 @@ pub fn start_checking_update(hwnd: HWND) {
                         MODAL_STATE.store(4, Ordering::SeqCst);
                     }
                 } else {
-                    // Chưa có bản official release nào mới hơn
+                    // Chưa có bản phát hành nào mới hơn
                     MODAL_STATE.store(4, Ordering::SeqCst);
                 }
             }
@@ -124,6 +129,40 @@ pub fn start_checking_update(hwnd: HWND) {
             InvalidateRect(hwnd, null_mut(), 0);
         }
     });
+}
+
+/// Kiểm tra cập nhật ngầm không làm gián đoạn người dùng (dùng khi khởi động)
+pub fn check_update_silent() {
+    let update_prerelease = crate::GLOBAL_STATE.lock().unwrap().config.update_prerelease;
+    if let Ok(releases) = fetch_all_releases() {
+        let target_release = if update_prerelease {
+            releases.first()
+        } else {
+            releases.iter().find(|r| !r.is_prerelease)
+        };
+
+        if let Some(rel) = target_release {
+            let clean_latest = rel.tag_name.trim_start_matches('v').trim();
+            let clean_current = CURRENT_VERSION.trim_start_matches('v').trim();
+
+            if is_newer_version(clean_latest, clean_current) && !rel.download_url.is_empty() {
+                *LATEST_VERSION_TAG.lock().unwrap() = rel.tag_name.clone();
+                *LATEST_DOWNLOAD_URL.lock().unwrap() = rel.download_url.clone();
+                *CHANGELOG_BODY.lock().unwrap() = rel.body.clone();
+
+                let display_tag = if rel.tag_name.starts_with('v') {
+                    rel.tag_name.clone()
+                } else {
+                    format!("v{}", rel.tag_name)
+                };
+                let msg = format!(
+                    "HoyuKey hiện đã có phiên bản {} mới! Nhấn để cập nhật (chỉ mất 5s)!",
+                    display_tag
+                );
+                crate::show_notification("Cập nhật HoyuKey", &msg);
+            }
+        }
+    }
 }
 
 pub fn start_downloading_update(hwnd: HWND) {
