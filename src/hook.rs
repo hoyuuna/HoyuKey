@@ -502,7 +502,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
     if let Some(ch) = vk_to_char(kbd.vkCode, kbd.scanCode) {
         // Kiểm tra nạp nền con trỏ (Background Caret Context - 0ms latency, không block hook)
         if repeat_count == 0 {
-            let (enabled, dynamic_caret, is_telex, modern_tone, free_marking, smart_english, simple_telex, is_empty) = {
+            let (enabled, dynamic_caret, is_telex, modern_tone, free_marking, smart_english, simple_telex, is_empty, has_space_before) = {
                 let state = GLOBAL_STATE.lock().unwrap();
                 (
                     state.config.enabled,
@@ -513,10 +513,12 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     state.config.smart_english,
                     state.config.simple_telex,
                     state.engine.current_word.is_empty(),
+                    state.engine.has_space_before,
                 )
             };
 
-            if enabled && dynamic_caret && is_empty {
+            // CHỈ kích hoạt sửa dấu tự do khi con trỏ ở sát chữ (KHÔNG ĐƯỢC đứng sau khoảng trắng)
+            if enabled && dynamic_caret && is_empty && !has_space_before {
                 let is_candidate_key = if is_telex {
                     matches!(ch, 's' | 'f' | 'r' | 'x' | 'j' | 'z' | 'a' | 'e' | 'o' | 'w' | 'd' |
                                  'S' | 'F' | 'R' | 'X' | 'J' | 'Z' | 'A' | 'E' | 'O' | 'W' | 'D')
@@ -1013,11 +1015,16 @@ fn perform_selection_replacement(
 
         let mut transformed_word = None;
         if let Some(ref text) = copied {
-            let trimmed = text.trim();
-            if !trimmed.is_empty()
-                && trimmed.chars().count() <= 10
-                && trimmed.chars().all(|c| c.is_alphabetic())
-            {
+            // NGUYÊN TẮC: Con trỏ BẮT BUỘC phải tiếp giáp trực tiếp (sát chữ).
+            // Nếu ký tự cuối cùng của chuỗi bôi đen là khoảng trắng hoặc không phải chữ cái:
+            // Nghĩa là con trỏ đang đứng sau dấu cách -> TUYỆT ĐỐI KHÔNG BIẾN ĐỔI!
+            let is_touching_letter = text.chars().last().map_or(false, |c| c.is_alphabetic());
+            if is_touching_letter {
+                let trimmed = text.trim();
+                if !trimmed.is_empty()
+                    && trimmed.chars().count() <= 10
+                    && trimmed.chars().all(|c| c.is_alphabetic())
+                {
                 let res = if is_telex {
                     crate::engine::telex::transform_telex(
                         trimmed,
@@ -1043,6 +1050,7 @@ fn perform_selection_replacement(
                 }
             }
         }
+    }
 
         if let Some(new_word) = transformed_word {
             // Thay thế từ đã bôi đen bằng từ mới
