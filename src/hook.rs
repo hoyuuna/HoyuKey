@@ -74,9 +74,18 @@ static CTRL_SHIFT_READY: AtomicBool = AtomicBool::new(false);
 static LAST_PHYSICAL_VK: AtomicU32 = AtomicU32::new(0);
 static KEY_REPEAT_COUNT: AtomicU32 = AtomicU32::new(0);
 
+// Caching trạng thái ứng dụng trình duyệt: 0ms latency, không mở process handle trong hook
+static IS_CURRENT_APP_BROWSER: AtomicBool = AtomicBool::new(false);
+
 pub fn install_hook() -> bool {
     crate::automation::init_background_caret_loader();
+    init_caret_replacement_worker();
     unsafe {
+        let fg = GetForegroundWindow();
+        if !fg.is_null() {
+            on_focus_window_changed(fg);
+        }
+
         let kbd_hook = SetWindowsHookExW(
             WH_KEYBOARD_LL,
             Some(low_level_keyboard_proc),
@@ -193,7 +202,7 @@ pub fn on_focus_window_changed(new_hwnd: HWND) {
         return;
     }
 
-    let (remember_enabled, current_enabled, main_hwnd) = {
+    let (remember_enabled, current_enabled, main_hwnd, browser_compat, browser_apps) = {
         let state = match GLOBAL_STATE.lock() {
             Ok(s) => s,
             Err(_) => return,
@@ -202,20 +211,32 @@ pub fn on_focus_window_changed(new_hwnd: HWND) {
             state.config.remember_app_state,
             state.config.enabled,
             state.main_hwnd,
+            state.config.browser_compatibility,
+            state.config.browser_apps.clone(),
         )
     };
-
-    if !remember_enabled {
-        return;
-    }
 
     let app_name = match get_process_name_by_hwnd(new_hwnd) {
         Some(name) => name,
         None => return,
     };
 
+    let is_browser = if browser_compat {
+        browser_apps.split(',').any(|app| {
+            let app = app.trim().to_ascii_lowercase();
+            !app.is_empty() && (app_name == app || app_name == format!("{}.exe", app))
+        })
+    } else {
+        false
+    };
+    IS_CURRENT_APP_BROWSER.store(is_browser, Ordering::Relaxed);
+
     // Bỏ qua chính cửa sổ HoyuKey dashboard
     if app_name == "hoyukey.exe" {
+        return;
+    }
+
+    if !remember_enabled {
         return;
     }
 
@@ -436,14 +457,18 @@ unsafe extern "system" fn low_level_keyboard_proc(
     match kbd.vkCode as u16 {
         VK_BACK => {
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
-            let mut state = GLOBAL_STATE.lock().unwrap();
-            let simple_telex = state.config.simple_telex;
-            let bs_action = state.engine.handle_backspace(simple_telex);
-            drop(state);
+            let (bs_action, has_space_before, browser_compat) = {
+                let mut state = GLOBAL_STATE.lock().unwrap();
+                let simple_telex = state.config.simple_telex;
+                let browser_compat = state.config.browser_compatibility;
+                let bs_action = state.engine.handle_backspace(simple_telex);
+                let has_space_before = state.engine.has_space_before;
+                (bs_action, has_space_before, browser_compat)
+            };
 
             if let Some(KeyAction::Transform { backspaces, text }) = bs_action {
                 BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
-                send_transform_batch(backspaces, &text);
+                send_transform_batch(backspaces, &text, has_space_before, browser_compat);
                 return 1;
             } else {
                 return CallNextHookEx(null_mut(), code, wparam, lparam);
@@ -460,7 +485,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
             };
 
             if auto_dot {
-                send_transform_batch(0, ".");
+                send_replace_batch(0, 0, ".");
             }
 
             return CallNextHookEx(null_mut(), code, wparam, lparam);
@@ -591,6 +616,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                                     state.engine.raw_keys = new_word.clone();
                                     state.engine.has_transformed = true;
                                     state.engine.caret_offset = Some(new_word.chars().count() - deletes);
+                                    state.engine.caret_needs_check = false;
                                 }
 
                                 crate::automation::clear_cached_caret_word();
@@ -600,54 +626,48 @@ unsafe extern "system" fn low_level_keyboard_proc(
                             }
                         }
                     } else {
-                        // Cách 2: Dự phòng cho các app không hỗ trợ UIA (Chromium web, Discord, canvas...).
-                        // TUYỆT ĐỐI KHÔNG block phím trong hook! Cho phím ch đi qua tự nhiên (0ms latency).
-                        // Kích hoạt debounce timer 120ms: nếu người dùng gõ tiếp từ mới (như 'sao', 'fast'),
-                        // phím sau sẽ hủy ngay lập tức, không bôi đen hay can thiệp.
-                        // Chỉ khi người dùng dừng tay sau phím dấu (ví dụ bấm 'r' trên từ 'ngon' rồi chờ xem đổi dấu),
-                        // Cách 2 mới nhẹ nhàng bôi đen từ vừa gõ và đổi dấu bằng Ctrl + V.
+                        // Cách 2: Gửi yêu cầu tới dedicated worker thread với debounce 75ms (0ms hook latency, không spawn thread)
                         let seq = CARET_REPLACEMENT_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(120));
-                            if CARET_REPLACEMENT_SEQ.load(Ordering::SeqCst) == seq {
-                                perform_post_type_selection_replacement(
-                                    ch,
-                                    is_telex,
-                                    modern_tone,
-                                    free_marking,
-                                    smart_english,
-                                    simple_telex,
-                                );
-                            }
-                        });
+                        if let Ok(mut lock) = CARET_REPLACE_QUEUE.lock() {
+                            *lock = Some(CaretReplaceRequest {
+                                seq,
+                                ch,
+                                is_telex,
+                                modern_tone,
+                                free_marking,
+                                smart_english,
+                                simple_telex,
+                            });
+                            CARET_REPLACE_CONDVAR.notify_one();
+                        }
                     }
                 }
             }
-            // Đã kiểm tra xong phím đầu tiên sau điều hướng con trỏ: xóa cờ để các phím sau gõ với tốc độ tối đa 0ms
             if let Ok(mut state) = GLOBAL_STATE.lock() {
                 state.engine.caret_needs_check = false;
             }
         }
         crate::automation::clear_cached_caret_word();
 
-        // Khi người dùng giữ phím (auto-repeat >= 3):
-        // Tuyệt đối không can thiệp biến đổi để tránh nghẽn luồng phím Windows & lag máy
-        let action = if repeat_count >= 3 {
-            let mut state = GLOBAL_STATE.lock().unwrap();
-            state.engine.current_word.push(ch);
-            KeyAction::PassThrough
-        } else {
+        // Xử lý biến đổi ký tự thông qua engine (chỉ lock 1 lần duy nhất, lấy kết quả và mở khóa ngay)
+        let (action, has_space_before, browser_compatibility) = {
             let mut state = GLOBAL_STATE.lock().unwrap();
             let state = &mut *state;
-            state.engine.process_char(ch, &state.config)
+            let action = if repeat_count >= 3 {
+                state.engine.current_word.push(ch);
+                KeyAction::PassThrough
+            } else {
+                state.engine.process_char(ch, &state.config)
+            };
+            let has_space_before = state.engine.has_space_before;
+            let browser_compatibility = state.config.browser_compatibility;
+            (action, has_space_before, browser_compatibility)
         };
 
         match action {
             KeyAction::Transform { backspaces, text } => {
-                // Ghi nhận phím này bị chặn để chặn luôn KeyUp của nó
                 BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
-                // Gửi Backspace và chuỗi Unicode mới
-                send_transform_batch(backspaces, &text);
+                send_transform_batch(backspaces, &text, has_space_before, browser_compatibility);
                 return 1;
             }
             KeyAction::TransformCaret { deletes, backspaces, text } => {
@@ -875,8 +895,7 @@ unsafe fn is_focused_in_web_content() -> bool {
         return false;
     }
 
-    let mut pid: u32 = 0;
-    let tid = GetWindowThreadProcessId(hwnd, &mut pid);
+    let tid = GetWindowThreadProcessId(hwnd, null_mut());
     if tid == 0 {
         return false;
     }
@@ -885,7 +904,7 @@ unsafe fn is_focused_in_web_content() -> bool {
     gui_info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
 
     if GetGUIThreadInfo(tid, &mut gui_info) != 0 && !gui_info.hwndFocus.is_null() {
-        let mut class_buf = [0u16; 256];
+        let mut class_buf = [0u16; 64];
         let len = GetClassNameW(gui_info.hwndFocus, class_buf.as_mut_ptr(), class_buf.len() as i32);
         if len > 0 {
             let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
@@ -900,71 +919,20 @@ unsafe fn is_focused_in_web_content() -> bool {
     false
 }
 
-unsafe fn is_foreground_browser_app(apps_list: &str) -> bool {
-    let hwnd = GetForegroundWindow();
-    if hwnd.is_null() {
-        return false;
-    }
-
-    let mut pid: u32 = 0;
-    GetWindowThreadProcessId(hwnd, &mut pid);
-    if pid == 0 {
-        return false;
-    }
-
-    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-    if process.is_null() {
-        return false;
-    }
-
-    let mut path_buf = [0u16; 1024];
-    let mut size = path_buf.len() as u32;
-    let ok = QueryFullProcessImageNameW(
-        process,
-        0,
-        path_buf.as_mut_ptr(),
-        &mut size,
-    );
-    CloseHandle(process);
-
-    if ok != 0 && size > 0 {
-        let full_path = String::from_utf16_lossy(&path_buf[..size as usize]);
-        let exe_name = std::path::Path::new(&full_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-
-        for app in apps_list.split(',') {
-            let app = app.trim().to_ascii_lowercase();
-            if !app.is_empty() && (exe_name == app || exe_name == format!("{}.exe", app)) {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
 /// Gửi chuỗi Backspace và Unicode Text nguyên tử (Atomic SendInput).
 /// Gửi chuẩn Win32 API tương thích hoàn hảo với mọi ứng dụng, trình duyệt Chrome, Edge, Firefox, Word, Excel.
-unsafe fn send_transform_batch(backspaces: usize, text: &str) {
+/// Không bao giờ mở process handle hay gọi Win32 API nặng trong hook phím (0ms latency).
+unsafe fn send_transform_batch(
+    backspaces: usize,
+    text: &str,
+    has_space_before: bool,
+    browser_compatibility: bool,
+) {
     if backspaces == 0 && text.is_empty() {
         return;
     }
 
-    let (is_browser, has_space_before) = {
-        let state = GLOBAL_STATE.lock().unwrap();
-        if state.config.browser_compatibility && backspaces > 0 {
-            (
-                is_foreground_browser_app(&state.config.browser_apps),
-                state.engine.has_space_before,
-            )
-        } else {
-            (false, false)
-        }
-    };
-
+    let is_browser = browser_compatibility && IS_CURRENT_APP_BROWSER.load(Ordering::Relaxed);
     // Khi người dùng gõ trên thanh địa chỉ trình duyệt (Chrome, Edge, Brave, Cốc Cốc, Opera):
     // Trình duyệt tự động bôi đen (inline selection) gợi ý URL/tìm kiếm đầu tiên.
     // Nếu chưa có dấu cách (!has_space_before) và không phải trong nội dung web (!is_focused_in_web_content):
@@ -996,6 +964,63 @@ extern "system" {
 
 static CARET_REPLACEMENT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+struct CaretReplaceRequest {
+    seq: u64,
+    ch: char,
+    is_telex: bool,
+    modern_tone: bool,
+    free_marking: bool,
+    smart_english: bool,
+    simple_telex: bool,
+}
+
+static CARET_REPLACE_QUEUE: Mutex<Option<CaretReplaceRequest>> = Mutex::new(None);
+static CARET_REPLACE_CONDVAR: std::sync::Condvar = std::sync::Condvar::new();
+
+pub fn init_caret_replacement_worker() {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    std::thread::Builder::new()
+        .name("hoyukey-caret-replace".to_string())
+        .spawn(|| {
+            loop {
+                let req = {
+                    let mut lock = CARET_REPLACE_QUEUE.lock().unwrap();
+                    while lock.is_none() {
+                        lock = CARET_REPLACE_CONDVAR.wait(lock).unwrap();
+                    }
+                    // Chờ debounce 75ms: nếu người dùng đang gõ nhanh tiếp từ mới, phím sau sẽ đánh thức và hủy request cũ
+                    let (new_lock, timeout_res) = CARET_REPLACE_CONDVAR
+                        .wait_timeout(lock, std::time::Duration::from_millis(75))
+                        .unwrap();
+                    lock = new_lock;
+                    if timeout_res.timed_out() {
+                        lock.take()
+                    } else {
+                        continue;
+                    }
+                };
+
+                if let Some(req) = req {
+                    if CARET_REPLACEMENT_SEQ.load(Ordering::SeqCst) == req.seq {
+                        perform_post_type_selection_replacement(
+                            req.ch,
+                            req.is_telex,
+                            req.modern_tone,
+                            req.free_marking,
+                            req.smart_english,
+                            req.simple_telex,
+                        );
+                    }
+                }
+            }
+        })
+        .ok();
+}
+
 unsafe fn get_clipboard_text() -> Option<String> {
     for _ in 0..6 {
         if OpenClipboard(null_mut()) != 0 {
@@ -1016,7 +1041,7 @@ unsafe fn get_clipboard_text() -> Option<String> {
             }
             CloseClipboard();
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
     None
 }
@@ -1039,7 +1064,7 @@ unsafe fn set_clipboard_text(text: &str) -> bool {
             CloseClipboard();
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
     false
 }
@@ -1114,15 +1139,15 @@ fn perform_post_type_selection_replacement(
 
         // 3. Gửi Ctrl + Shift + Left để bôi đen từ vừa gõ (bao gồm cả ký tự ch vừa gõ vào)
         send_key_combo(&[VK_CONTROL, VK_SHIFT, VK_LEFT]);
-        std::thread::sleep(std::time::Duration::from_millis(15));
+        std::thread::sleep(std::time::Duration::from_millis(8));
 
         // 4. Gửi Ctrl + C để copy từ đã bôi đen
         send_key_combo(&[VK_CONTROL, b'C' as u16]);
 
-        // 5. Chờ ứng dụng đưa dữ liệu vào clipboard (tối đa 30ms)
+        // 5. Chờ ứng dụng đưa dữ liệu vào clipboard (tối đa 20ms)
         let mut copied = None;
-        for _ in 0..6 {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(2));
             if let Some(text) = get_clipboard_text() {
                 if !text.is_empty() {
                     copied = Some(text);
@@ -1180,7 +1205,7 @@ fn perform_post_type_selection_replacement(
             // THÀNH CÔNG: Đưa từ mới vào clipboard và gửi Ctrl + V để thay thế vùng chọn nguyên tử
             set_clipboard_text(&new_word);
             send_key_combo(&[VK_CONTROL, b'V' as u16]);
-            std::thread::sleep(std::time::Duration::from_millis(15));
+            std::thread::sleep(std::time::Duration::from_millis(8));
 
             // Cập nhật engine
             if let Ok(mut state) = GLOBAL_STATE.lock() {

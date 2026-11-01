@@ -399,32 +399,6 @@ fn get_uia_caret_word() -> Option<CaretWordContext> {
             hwnd_fg
         };
 
-        // Đánh thức cây Accessibility của Chromium (Chrome, Edge...) nếu đang ở chế độ lười (lazy-init)
-        const WM_GETOBJECT: u32 = 0x003D;
-        const OBJID_CLIENT: isize = -4;
-        const SMTO_ABORTIFHUNG: u32 = 0x0002;
-        let mut result: usize = 0;
-        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
-            hwnd_target,
-            WM_GETOBJECT,
-            0,
-            OBJID_CLIENT,
-            SMTO_ABORTIFHUNG,
-            20,
-            &mut result,
-        );
-        if hwnd_target != hwnd_fg {
-            let _ = windows_sys::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
-                hwnd_fg,
-                WM_GETOBJECT,
-                0,
-                OBJID_CLIENT,
-                SMTO_ABORTIFHUNG,
-                20,
-                &mut result,
-            );
-        }
-
         let uia_raw = get_cached_uia()?;
         let uia = &**(uia_raw as *mut *mut IUIAutomationVtbl);
 
