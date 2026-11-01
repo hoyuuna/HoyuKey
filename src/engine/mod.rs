@@ -30,7 +30,7 @@ pub struct Engine {
     pub current_word: String,
     pub raw_keys: String,
     pub has_transformed: bool,
-    last_word_before_space: Option<(String, String, bool)>,
+    pub last_word_before_space: Option<(String, String, bool)>,
     pub caret_offset: Option<usize>,
     pub at_start_of_line: bool,
     pub after_sentence_end: bool,
@@ -184,17 +184,12 @@ impl Engine {
         }
     }
 
-    /// Khôi phục từ vừa gõ khi bấm chuột vào chữ (cho phép sửa dấu / từ khi click chuột)
+    /// Khôi phục hoặc dọn dẹp khi bấm chuột vào chữ
     pub fn on_mouse_click(&mut self) {
-        if self.current_word.is_empty() {
-            if let Some((word, raw, transformed)) = self.last_word_before_space.clone() {
-                let len = word.chars().count();
-                self.current_word = word;
-                self.raw_keys = raw;
-                self.has_transformed = transformed;
-                self.caret_offset = Some(len);
-            }
-        }
+        self.current_word.clear();
+        self.raw_keys.clear();
+        self.has_transformed = false;
+        self.caret_offset = None;
     }
 
     /// Xử lý một ký tự gõ vào
@@ -304,10 +299,9 @@ impl Engine {
                         let deletes = post_word.chars().count();
                         let backspaces = pre_word.chars().count();
                         self.current_word = new_word.clone();
-            self.caret_offset = Some(self.current_word.chars().count());
                         self.raw_keys = new_word.clone();
                         self.has_transformed = true;
-                        self.caret_offset = Some(self.current_word.chars().count());
+                        self.caret_offset = Some(self.current_word.chars().count() - deletes);
                         return KeyAction::TransformCaret {
                             deletes,
                             backspaces,

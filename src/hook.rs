@@ -506,7 +506,18 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 };
 
                 if is_candidate_key {
-                    if let Some(ctx) = crate::automation::get_caret_word_context() {
+                    let ctx = crate::automation::get_caret_word_context().or_else(|| {
+                        // Dự phòng nếu app không hỗ trợ UIA: dùng từ vừa gõ trước khoảng trắng nếu có
+                        let state = GLOBAL_STATE.lock().unwrap();
+                        let (word, _, _) = state.engine.last_word_before_space.as_ref()?;
+                        Some(crate::automation::CaretWordContext {
+                            full_word: word.clone(),
+                            pre_word: word.clone(),
+                            post_word: String::new(),
+                        })
+                    });
+
+                    if let Some(ctx) = ctx {
                         let target_word = &ctx.full_word;
 
                         let transformed = if is_telex {
@@ -538,6 +549,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                                     state.engine.current_word = new_word.clone();
                                     state.engine.raw_keys = new_word.clone();
                                     state.engine.has_transformed = true;
+                                    state.engine.caret_offset = Some(new_word.chars().count() - deletes);
                                 }
 
                                 BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
@@ -746,6 +758,32 @@ unsafe fn send_replace_batch(deletes: usize, backspaces: usize, text: &str) {
             wVk: 0,
             wScan: c,
             dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(up);
+    }
+
+    // 4. Nếu trước đó đã xóa phần đuôi bằng Delete (con trỏ ở giữa từ):
+    // Gửi lại đúng số phím Left Arrow để đưa con trỏ quay về đúng vị trí giữa từ ban đầu!
+    for _ in 0..deletes {
+        let mut down: INPUT = std::mem::zeroed();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT {
+            wVk: VK_LEFT,
+            wScan: 0,
+            dwFlags: 0,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(down);
+
+        let mut up: INPUT = std::mem::zeroed();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT {
+            wVk: VK_LEFT,
+            wScan: 0,
+            dwFlags: KEYEVENTF_KEYUP,
             time: 0,
             dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
         };
