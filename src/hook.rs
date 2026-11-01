@@ -1047,9 +1047,9 @@ pub fn init_caret_replacement_worker() {
                     while lock.is_none() {
                         lock = CARET_REPLACE_CONDVAR.wait(lock).unwrap();
                     }
-                    // Chờ debounce 75ms: nếu người dùng đang gõ nhanh tiếp từ mới, phím sau sẽ đánh thức và hủy request cũ
+                    // Chờ debounce 30ms: phản hồi siêu tốc, gần như tức thì khi bấm phím sửa dấu
                     let (new_lock, timeout_res) = CARET_REPLACE_CONDVAR
-                        .wait_timeout(lock, std::time::Duration::from_millis(75))
+                        .wait_timeout(lock, std::time::Duration::from_millis(30))
                         .unwrap();
                     lock = new_lock;
                     if timeout_res.timed_out() {
@@ -1194,16 +1194,16 @@ fn perform_post_type_selection_replacement(
 
         // 3. Gửi Ctrl + Shift + Left để bôi đen từ vừa gõ (bao gồm cả ký tự ch vừa gõ vào)
         send_key_combo(&[VK_CONTROL, VK_SHIFT, VK_LEFT]);
-        // BẮT BUỘC: Nghỉ 20ms để ứng dụng (Chrome, Discord, Word...) kịp thời cập nhật vùng chọn
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // Chờ 10ms để ứng dụng (Chrome, Discord, Word...) kịp cập nhật vùng chọn
+        std::thread::sleep(std::time::Duration::from_millis(10));
 
         // 4. Gửi Ctrl + C để copy từ đã bôi đen
         send_key_combo(&[VK_CONTROL, b'C' as u16]);
 
-        // 5. Chờ ứng dụng đưa dữ liệu vào clipboard (tối đa 60ms)
+        // 5. Chờ ứng dụng đưa dữ liệu vào clipboard (tối đa 45ms, kiểm tra mỗi 3ms để đón dữ liệu ngay khi sẵn sàng)
         let mut copied = None;
-        for _ in 0..12 {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+        for _ in 0..15 {
+            std::thread::sleep(std::time::Duration::from_millis(3));
             if let Some(text) = get_clipboard_text() {
                 if !text.is_empty() {
                     copied = Some(text);
@@ -1265,8 +1265,8 @@ fn perform_post_type_selection_replacement(
             // THÀNH CÔNG: Đưa từ mới vào clipboard và gửi Ctrl + V để thay thế vùng chọn nguyên tử
             set_clipboard_text(&new_word);
             send_key_combo(&[VK_CONTROL, b'V' as u16]);
-            // BẮT BUỘC: Nghỉ 35ms để ứng dụng kịp dán văn bản mới trước khi khôi phục clipboard cũ
-            std::thread::sleep(std::time::Duration::from_millis(35));
+            // Chờ 20ms để ứng dụng dán xong văn bản mới trước khi khôi phục clipboard cũ
+            std::thread::sleep(std::time::Duration::from_millis(20));
 
             // Cập nhật engine
             if let Ok(mut state) = GLOBAL_STATE.lock() {
