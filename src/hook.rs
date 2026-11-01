@@ -8,7 +8,7 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_KEYBOARD,
-    KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK, VK_CONTROL, VK_DOWN, VK_END,
+    KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END,
     VK_ESCAPE, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT,
     VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
 };
@@ -475,6 +475,80 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
     // 7. Chuyển đổi mã phím thành ký tự Unicode
     if let Some(ch) = vk_to_char(kbd.vkCode, kbd.scanCode) {
+        // Kiểm tra tính năng Sửa dấu tự do tại con trỏ (UI Automation Dynamic Caret)
+        // Khi buffer đang rỗng và người dùng gõ một phím dấu/mũ/sửa tiếng Việt:
+        if repeat_count == 0 {
+            let (enabled, dynamic_caret, is_telex, modern_tone, free_marking, smart_english, simple_telex, is_empty) = {
+                let state = GLOBAL_STATE.lock().unwrap();
+                (
+                    state.config.enabled,
+                    state.config.dynamic_caret,
+                    state.config.input_method == crate::config::InputMethod::Telex,
+                    state.config.modern_tone,
+                    state.config.free_marking,
+                    state.config.smart_english,
+                    state.config.simple_telex,
+                    state.engine.current_word.is_empty(),
+                )
+            };
+
+            if enabled && dynamic_caret && is_empty {
+                let is_candidate_key = if is_telex {
+                    matches!(ch, 's' | 'f' | 'r' | 'x' | 'j' | 'z' | 'a' | 'e' | 'o' | 'w' | 'd' |
+                                 'S' | 'F' | 'R' | 'X' | 'J' | 'Z' | 'A' | 'E' | 'O' | 'W' | 'D')
+                } else {
+                    matches!(ch, '1'..='9' | '0')
+                };
+
+                if is_candidate_key {
+                    if let Some(ctx) = crate::automation::get_caret_word_context() {
+                        let target_word = if !ctx.full_word.is_empty() {
+                            &ctx.full_word
+                        } else {
+                            &ctx.pre_word
+                        };
+
+                        let transformed = if is_telex {
+                            crate::engine::telex::transform_telex(
+                                target_word,
+                                ch,
+                                modern_tone,
+                                free_marking,
+                                smart_english,
+                                simple_telex,
+                            )
+                        } else {
+                            crate::engine::vni::transform_vni(
+                                target_word,
+                                ch,
+                                modern_tone,
+                                free_marking,
+                                smart_english,
+                            )
+                        };
+
+                        if let Some(new_word) = transformed {
+                            if new_word != *target_word {
+                                let deletes = ctx.post_word.chars().count();
+                                let backspaces = ctx.pre_word.chars().count();
+
+                                {
+                                    let mut state = GLOBAL_STATE.lock().unwrap();
+                                    state.engine.current_word = new_word.clone();
+                                    state.engine.raw_keys = new_word.clone();
+                                    state.engine.has_transformed = true;
+                                }
+
+                                BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
+                                send_replace_batch(deletes, backspaces, &new_word);
+                                return 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Khi người dùng giữ phím (auto-repeat >= 3):
         // Tuyệt đối không can thiệp biến đổi để tránh nghẽn luồng phím Windows & lag máy
         let action = if repeat_count >= 3 {
@@ -588,20 +662,42 @@ fn vk_to_char(vk: u32, scan_code: u32) -> Option<char> {
 
 
 
-/// Gửi chuỗi Backspace và Unicode Text nguyên tử (Atomic SendInput).
-/// Gửi chuẩn Win32 API tương thích hoàn hảo với mọi ứng dụng, trình duyệt Chrome, Edge, Firefox, Word, Excel.
-unsafe fn send_transform_batch(backspaces: usize, text: &str) {
-    if backspaces == 0 && text.is_empty() {
+/// Gửi chuỗi Delete, Backspace và Unicode Text nguyên tử (Atomic SendInput).
+/// Hỗ trợ sửa dấu tại con trỏ (xóa đuôi sau con trỏ bằng Delete và xóa đầu trước con trỏ bằng Backspace).
+unsafe fn send_replace_batch(deletes: usize, backspaces: usize, text: &str) {
+    if deletes == 0 && backspaces == 0 && text.is_empty() {
         return;
     }
 
-    // Gửi chính xác số lượng backspaces cần thiết, không bao giờ nuốt dấu cách
-    // hay ký tự mở ngoặc / dấu câu phía trước của người dùng
-    let total_backspaces = backspaces;
-    let mut inputs = Vec::with_capacity(total_backspaces * 2 + text.encode_utf16().count() * 2);
+    let mut inputs = Vec::with_capacity((deletes + backspaces) * 2 + text.encode_utf16().count() * 2);
 
-    // 1. Gửi chính xác số lượng phím Backspace cần xóa
-    for _ in 0..total_backspaces {
+    // 1. Gửi phím Delete để xóa phần đuôi phía sau con trỏ (nếu con trỏ đang ở giữa từ)
+    for _ in 0..deletes {
+        let mut down: INPUT = std::mem::zeroed();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT {
+            wVk: VK_DELETE,
+            wScan: 0,
+            dwFlags: 0,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(down);
+
+        let mut up: INPUT = std::mem::zeroed();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT {
+            wVk: VK_DELETE,
+            wScan: 0,
+            dwFlags: KEYEVENTF_KEYUP,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(up);
+    }
+
+    // 2. Gửi phím Backspace để xóa phần đầu phía trước con trỏ
+    for _ in 0..backspaces {
         let mut down: INPUT = std::mem::zeroed();
         down.r#type = INPUT_KEYBOARD;
         down.Anonymous.ki = KEYBDINPUT {
@@ -625,7 +721,7 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
         inputs.push(up);
     }
 
-    // 2. Bơm chuỗi Unicode tiếng Việt mới
+    // 3. Bơm chuỗi Unicode tiếng Việt mới
     for c in text.encode_utf16() {
         let mut down: INPUT = std::mem::zeroed();
         down.r#type = INPUT_KEYBOARD;
@@ -650,7 +746,6 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
         inputs.push(up);
     }
 
-    // Gửi toàn bộ atomic trong 1 lệnh duy nhất, hệ điều hành xử lý tức thì không có độ trễ
     if !inputs.is_empty() {
         SendInput(
             inputs.len() as u32,
@@ -658,4 +753,10 @@ unsafe fn send_transform_batch(backspaces: usize, text: &str) {
             std::mem::size_of::<INPUT>() as i32,
         );
     }
+}
+
+/// Gửi chuỗi Backspace và Unicode Text nguyên tử (Atomic SendInput).
+/// Gửi chuẩn Win32 API tương thích hoàn hảo với mọi ứng dụng, trình duyệt Chrome, Edge, Firefox, Word, Excel.
+unsafe fn send_transform_batch(backspaces: usize, text: &str) {
+    send_replace_batch(0, backspaces, text);
 }

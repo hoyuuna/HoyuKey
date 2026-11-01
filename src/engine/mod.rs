@@ -1386,4 +1386,26 @@ mod tests {
         engine.reset();
         assert_eq!(simulate_type(&mut engine, &config, "cuaww"), "cuaw");
     }
+
+    #[test]
+    fn test_dynamic_caret_word_transformation() {
+        let config = Config::default();
+        assert!(config.dynamic_caret);
+
+        // Telex: "tày" + 's' -> "táy"
+        let transformed = telex::transform_telex("tày", 's', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex);
+        assert_eq!(transformed, Some("táy".to_string()));
+
+        // Telex: "chuyen" + 'e' -> "chuyên"
+        let transformed_e = telex::transform_telex("chuyen", 'e', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex);
+        assert_eq!(transformed_e, Some("chuyên".to_string()));
+
+        // VNI: "tày" + '1' -> "táy"
+        let transformed_vni = vni::transform_vni("tày", '1', config.modern_tone, config.free_marking, config.smart_english);
+        assert_eq!(transformed_vni, Some("táy".to_string()));
+
+        // Foreign word with smart_english: "file" + 's' -> None
+        let transformed_en = telex::transform_telex("file", 's', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex);
+        assert_eq!(transformed_en, None);
+    }
 }

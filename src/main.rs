@@ -8,6 +8,7 @@ mod tray;
 mod ui;
 pub mod updater;
 pub mod autostart;
+pub mod automation;
 
 use std::ptr::null_mut;
 use std::sync::{LazyLock, Mutex};

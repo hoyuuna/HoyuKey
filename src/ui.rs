@@ -45,6 +45,7 @@ static SMART_ENGLISH_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static MODIFY_TONE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static SIMPLE_TELEX_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static DYNAMIC_CARET_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
 const V_BGRA_32: &[u8] = include_bytes!("../icon/v_32.bin");
@@ -284,6 +285,7 @@ pub fn show_settings_window() {
         AUTO_RESTORE_PROGRESS.store(if state.config.auto_restore { 1000 } else { 0 }, Ordering::SeqCst);
         let is_telex = state.config.input_method == InputMethod::Telex;
         SIMPLE_TELEX_PROGRESS.store(if is_telex && state.config.simple_telex { 1000 } else { 0 }, Ordering::SeqCst);
+        DYNAMIC_CARET_PROGRESS.store(if state.config.dynamic_caret { 1000 } else { 0 }, Ordering::SeqCst);
         INPUT_METHOD_PROGRESS.store(if state.config.input_method == InputMethod::Vni { 1000 } else { 0 }, Ordering::SeqCst);
         SWITCH_KEY_PROGRESS.store(if state.config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, Ordering::SeqCst);
         START_WITH_WINDOWS_PROGRESS.store(if state.config.start_with_windows { 1000 } else { 0 }, Ordering::SeqCst);
@@ -454,6 +456,7 @@ unsafe extern "system" fn settings_wnd_proc(
                 advance_anim(if config.auto_restore { 1000 } else { 0 }, &AUTO_RESTORE_PROGRESS);
                 let is_telex = config.input_method == InputMethod::Telex;
                 advance_anim(if is_telex && config.simple_telex { 1000 } else { 0 }, &SIMPLE_TELEX_PROGRESS);
+                advance_anim(if config.dynamic_caret { 1000 } else { 0 }, &DYNAMIC_CARET_PROGRESS);
                 advance_anim(if config.input_method == InputMethod::Vni { 1000 } else { 0 }, &INPUT_METHOD_PROGRESS);
                 advance_anim(if config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, &SWITCH_KEY_PROGRESS);
                 advance_anim(if config.start_with_windows { 1000 } else { 0 }, &START_WITH_WINDOWS_PROGRESS);
@@ -603,7 +606,7 @@ unsafe extern "system" fn settings_wnd_proc(
 fn get_max_scroll_for_page(page: u8) -> i32 {
     match page {
         0 => 80,
-        1 => 46,
+        1 => 118,
         2 => {
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
@@ -978,6 +981,9 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                         state.config.simple_telex = !state.config.simple_telex;
                         changed = true;
                     }
+                } else if y_content >= 612 && y_content <= 656 {
+                    state.config.dynamic_caret = !state.config.dynamic_caret;
+                    changed = true;
                 }
             }
         } else if page == 2 {
@@ -1631,8 +1637,8 @@ unsafe fn render_page_elements(
                 font_tab,
             );
 
-            // Card 2: 6 Tùy chọn đánh máy thông minh (y = 174..602, cao 428px)
-            gdiplus_draw_rounded_card(graphics, card_x, 174 - sy, card_w, 428, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            // Card 2: 7 Tùy chọn đánh máy thông minh (y = 174..674, cao 500px)
+            gdiplus_draw_rounded_card(graphics, card_x, 174 - sy, card_w, 500, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Bỏ dấu kiểu mới
             draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 188 - sy, ARGB_TEXT_PRIMARY, false);
@@ -1682,6 +1688,14 @@ unsafe fn render_page_elements(
             draw_gdip_text(graphics, font_desc, "w đơn lẻ ra w, uow ra uơ, không hoàn tác dấu lặp", left_text, 572 - sy, telex_desc_color, false);
             let simple_progress = if is_vni { 0.0 } else { SIMPLE_TELEX_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0 };
             draw_animated_switch(graphics, right_ctrl - 50, 554 - sy, simple_progress);
+
+            gdiplus_draw_line(graphics, left_text, 606 - sy, right_ctrl, 606 - sy, ARGB_DIVIDER, 1.0);
+
+            // 7. Sửa dấu tự do tại con trỏ (UI Automation)
+            draw_gdip_text(graphics, font_bold, "Sửa dấu tự do tại con trỏ", left_text, 620 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Nhận diện từ khi click chuột/mũi tên để sửa dấu (UI Automation)", left_text, 644 - sy, ARGB_TEXT_MUTED, false);
+            let caret_progress = DYNAMIC_CARET_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
+            draw_animated_switch(graphics, right_ctrl - 50, 626 - sy, caret_progress);
 
         } else if page == 2 {
             // Card 1: Phím tắt chuyển đổi chế độ (cao 122px, y = 86..208)
