@@ -649,7 +649,11 @@ mod tests {
         engine.on_mouse_click();
         assert_eq!(engine.current_word, "hóc");
 
-        // Gõ 'j' sửa dấu -> "hoc"
+        // Gõ 'j' đổi dấu sắc sang dấu nặng -> "học"
+        engine.process_char('j', &config);
+        assert_eq!(engine.current_word, "học");
+
+        // Gõ tiếp 'j' (lặp phím dấu) để xóa dấu -> "hoc"
         engine.process_char('j', &config);
         assert_eq!(engine.current_word, "hoc");
     }
