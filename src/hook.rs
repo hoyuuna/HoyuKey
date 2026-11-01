@@ -276,9 +276,9 @@ unsafe extern "system" fn low_level_mouse_proc(
     if code >= 0 {
         let msg = wparam as u32;
         if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
-            // Khi click chuột: khôi phục từ vừa gõ nếu có để cho phép sửa dấu/từ khi click chuột vào chữ
-            let mut state = GLOBAL_STATE.lock().unwrap();
-            state.engine.on_mouse_click();
+            // Khi click chuột: người dùng chuyển con trỏ sang vị trí mới,
+            // reset sạch bộ đệm để dynamic caret nhận diện chính xác từ tại vị trí chuột mới
+            reset_engine();
         }
     }
     CallNextHookEx(null_mut(), code, wparam, lparam)
@@ -454,14 +454,18 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
-        VK_LEFT => {
+        VK_LEFT | VK_RIGHT => {
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
-            let mut state = GLOBAL_STATE.lock().unwrap();
-            state.engine.on_arrow_left();
-            return CallNextHookEx(null_mut(), code, wparam, lparam);
-        }
-        VK_RIGHT => {
-            BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
+            let dynamic_caret = {
+                let state = GLOBAL_STATE.lock().unwrap();
+                state.config.dynamic_caret
+            };
+            if dynamic_caret {
+                reset_engine();
+            } else {
+                let mut state = GLOBAL_STATE.lock().unwrap();
+                state.engine.on_arrow_left();
+            }
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
         VK_ESCAPE | VK_TAB | VK_UP | VK_DOWN | VK_HOME

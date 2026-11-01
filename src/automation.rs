@@ -2,14 +2,38 @@
 
 use std::ffi::c_void;
 use std::ptr::null_mut;
+use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::System::Com::*;
 use windows_sys::Win32::UI::Accessibility::*;
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsHungAppWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindowThreadProcessId, IsHungAppWindow, SendMessageW, WM_GETTEXT,
+    WM_GETTEXTLENGTH,
+};
 
 #[link(name = "oleaut32")]
 extern "system" {
     fn SysFreeString(bstr: *const u16);
     fn SysStringLen(bstr: *const u16) -> u32;
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn GetGUIThreadInfo(idThread: u32, lpgui: *mut GUITHREADINFO) -> i32;
+}
+
+const EM_GETSEL: u32 = 0x00B0;
+
+#[repr(C)]
+struct GUITHREADINFO {
+    pub cbSize: u32,
+    pub flags: u32,
+    pub hwndActive: HWND,
+    pub hwndFocus: HWND,
+    pub hwndCapture: HWND,
+    pub hwndMenuOwner: HWND,
+    pub hwndMoveSize: HWND,
+    pub hwndCaret: HWND,
+    pub rcCaret: RECT,
 }
 
 pub const IID_IUI_AUTOMATION: windows_sys::core::GUID =
@@ -179,7 +203,7 @@ unsafe fn bstr_to_string(bstr: *const u16) -> String {
     String::from_utf16_lossy(slice)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaretWordContext {
     /// Toàn bộ từ đang xét tại vị trí con trỏ (ví dụ: "tày")
     pub full_word: String,
@@ -189,14 +213,106 @@ pub struct CaretWordContext {
     pub post_word: String,
 }
 
-/// Trích xuất từ tại vị trí con trỏ (Caret) thông qua Windows UI Automation
-pub fn get_caret_word_context() -> Option<CaretWordContext> {
+/// Trích xuất từ và vị trí con trỏ từ một chuỗi văn bản và chỉ số vị trí con trỏ (character offset)
+pub fn extract_word_from_text_at_caret(text: &str, caret_char_offset: usize) -> Option<CaretWordContext> {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n == 0 {
+        return None;
+    }
+    let pos = caret_char_offset.min(n);
+
+    let is_word_char = |c: char| c.is_alphabetic() || c == '_';
+
+    let mut word_start = pos;
+    let mut word_end = pos;
+
+    if pos > 0 && is_word_char(chars[pos - 1]) {
+        // Con trỏ đang đứng ngay sau từ (ví dụ: "đây| ") hoặc đang nằm trong từ ("đ|ây")
+        while word_start > 0 && is_word_char(chars[word_start - 1]) {
+            word_start -= 1;
+        }
+        while word_end < n && is_word_char(chars[word_end]) {
+            word_end += 1;
+        }
+    } else if pos < n && is_word_char(chars[pos]) {
+        // Con trỏ đang đứng ở đầu từ: "|đây"
+        while word_start > 0 && is_word_char(chars[word_start - 1]) {
+            word_start -= 1;
+        }
+        while word_end < n && is_word_char(chars[word_end]) {
+            word_end += 1;
+        }
+    } else {
+        return None;
+    }
+
+    if word_start >= word_end {
+        return None;
+    }
+
+    let full_word: String = chars[word_start..word_end].iter().collect();
+    let pre_word: String = chars[word_start..pos].iter().collect();
+    let post_word: String = chars[pos..word_end].iter().collect();
+
+    Some(CaretWordContext {
+        full_word,
+        pre_word,
+        post_word,
+    })
+}
+
+/// Cách 1: Đọc từ qua Win32 Edit / RichEdit control (Notepad, WordPad, hộp thoại Windows...)
+fn get_win32_edit_caret_word(fg: HWND) -> Option<CaretWordContext> {
     unsafe {
-        let hwnd_fg = GetForegroundWindow();
-        if hwnd_fg.is_null() || IsHungAppWindow(hwnd_fg) != 0 {
+        let tid = GetWindowThreadProcessId(fg, null_mut());
+        let mut gui: GUITHREADINFO = std::mem::zeroed();
+        gui.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        if GetGUIThreadInfo(tid, &mut gui) == 0 {
             return None;
         }
 
+        let target_hwnd = if !gui.hwndFocus.is_null() {
+            gui.hwndFocus
+        } else if !gui.hwndCaret.is_null() {
+            gui.hwndCaret
+        } else {
+            return None;
+        };
+
+        let mut start: u32 = 0;
+        let mut end: u32 = 0;
+        SendMessageW(
+            target_hwnd,
+            EM_GETSEL,
+            &mut start as *mut _ as usize,
+            &mut end as *mut _ as isize,
+        );
+
+        let len = SendMessageW(target_hwnd, WM_GETTEXTLENGTH, 0, 0) as usize;
+        if len == 0 || len > 65536 {
+            return None;
+        }
+
+        let mut buf = vec![0u16; len + 1];
+        let copied = SendMessageW(
+            target_hwnd,
+            WM_GETTEXT,
+            (len + 1) as usize,
+            buf.as_mut_ptr() as isize,
+        ) as usize;
+        if copied == 0 {
+            return None;
+        }
+
+        let text = String::from_utf16_lossy(&buf[..copied]);
+        extract_word_from_text_at_caret(&text, start as usize)
+    }
+}
+
+/// Cách 2: Đọc từ qua Windows UI Automation (Word, Chrome, Edge, VS Code, UWP, WPF...)
+fn get_uia_caret_word() -> Option<CaretWordContext> {
+    unsafe {
         let _ = CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED as u32);
 
         let mut uia_raw: *mut c_void = null_mut();
@@ -246,7 +362,7 @@ pub fn get_caret_word_context() -> Option<CaretWordContext> {
         }
         let caret_range = ComPtr::<IUIAutomationTextRangeVtbl>::new(caret_range_raw)?;
 
-        // 1. Lấy toàn bộ từ bao quanh con trỏ (Word Range)
+        // Lấy toàn bộ từ bao quanh con trỏ
         let mut word_range_raw: *mut c_void = null_mut();
         let hr = (caret_range.vtbl().Clone)(caret_range.as_ptr(), &mut word_range_raw);
         if hr < 0 || word_range_raw.is_null() {
@@ -265,7 +381,7 @@ pub fn get_caret_word_context() -> Option<CaretWordContext> {
             return None;
         };
 
-        // 2. Lấy đoạn từ đầu từ tới con trỏ (Pre Range)
+        // Lấy đoạn từ đầu từ tới con trỏ
         let mut pre_range_raw: *mut c_void = null_mut();
         let hr = (caret_range.vtbl().Clone)(caret_range.as_ptr(), &mut pre_range_raw);
         let raw_pre_text = if hr >= 0 && !pre_range_raw.is_null() {
@@ -289,7 +405,7 @@ pub fn get_caret_word_context() -> Option<CaretWordContext> {
             String::new()
         };
 
-        // 3. Lấy đoạn từ con trỏ tới cuối từ (Post Range)
+        // Lấy đoạn từ con trỏ tới cuối từ
         let mut post_range_raw: *mut c_void = null_mut();
         let hr = (word_range.vtbl().Clone)(word_range.as_ptr(), &mut post_range_raw);
         let raw_post_text = if hr >= 0 && !post_range_raw.is_null() {
@@ -313,13 +429,11 @@ pub fn get_caret_word_context() -> Option<CaretWordContext> {
             String::new()
         };
 
-        // Chuẩn hóa từ: lọc bỏ khoảng trắng hoặc ký tự phân cách ở 2 đầu
         let full_clean = raw_full_text.trim();
         if full_clean.is_empty() {
             return None;
         }
 
-        // Tách ra từ thực tế đang xét (bỏ khoảng trắng/dấu câu bám sau nếu có)
         let pre_clean = raw_pre_text.trim_start();
         let post_clean = raw_post_text.trim_end();
 
@@ -328,5 +442,51 @@ pub fn get_caret_word_context() -> Option<CaretWordContext> {
             pre_word: pre_clean.to_string(),
             post_word: post_clean.to_string(),
         })
+    }
+}
+
+/// Trích xuất từ tại vị trí con trỏ (Caret):
+/// Kết hợp Win32 Edit API (Notepad, hộp thoại) và Windows UI Automation (Word, Chrome, Edge...)
+pub fn get_caret_word_context() -> Option<CaretWordContext> {
+    unsafe {
+        let hwnd_fg = GetForegroundWindow();
+        if hwnd_fg.is_null() || IsHungAppWindow(hwnd_fg) != 0 {
+            return None;
+        }
+
+        // 1. Ưu tiên Win32 Edit API siêu nhanh và hỗ trợ 100% Notepad, WordPad, form desktop
+        if let Some(ctx) = get_win32_edit_caret_word(hwnd_fg) {
+            return Some(ctx);
+        }
+
+        // 2. Dự phòng sang UI Automation cho các ứng dụng hiện đại (Chrome, Word, VS Code...)
+        get_uia_caret_word()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_word_from_text() {
+        let text = "đây là gì đó";
+        // Con trỏ đứng ngay sau từ "đây" (char index 3)
+        let ctx = extract_word_from_text_at_caret(text, 3).unwrap();
+        assert_eq!(ctx.full_word, "đây");
+        assert_eq!(ctx.pre_word, "đây");
+        assert_eq!(ctx.post_word, "");
+
+        // Con trỏ đứng ở giữa: "đ|ây" (char index 1)
+        let ctx2 = extract_word_from_text_at_caret(text, 1).unwrap();
+        assert_eq!(ctx2.full_word, "đây");
+        assert_eq!(ctx2.pre_word, "đ");
+        assert_eq!(ctx2.post_word, "ây");
+
+        // Con trỏ đứng ở từ "đó" (char index 12)
+        let ctx3 = extract_word_from_text_at_caret(text, 12).unwrap();
+        assert_eq!(ctx3.full_word, "đó");
+        assert_eq!(ctx3.pre_word, "đó");
+        assert_eq!(ctx3.post_word, "");
     }
 }
