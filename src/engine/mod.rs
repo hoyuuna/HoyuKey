@@ -38,6 +38,7 @@ pub struct Engine {
     pub has_typed_in_line: bool,
     pub last_char_typed: Option<char>,
     pub has_space_before: bool,
+    pub caret_needs_check: bool,
 }
 
 impl Engine {
@@ -54,6 +55,7 @@ impl Engine {
             has_typed_in_line: false,
             last_char_typed: None,
             has_space_before: false,
+            caret_needs_check: false,
         }
     }
 
@@ -64,6 +66,7 @@ impl Engine {
         self.last_word_before_space = None;
         self.caret_offset = None;
         self.has_space_before = false;
+        self.caret_needs_check = false;
     }
 
     pub fn on_enter(&mut self) {
@@ -163,6 +166,8 @@ impl Engine {
                 self.caret_offset = Some(len);
                 self.has_space_before = false;
                 self.at_start_of_line = false;
+            } else {
+                self.caret_needs_check = true;
             }
         } else if let Some(offset) = self.caret_offset {
             if offset > 0 {
@@ -172,11 +177,17 @@ impl Engine {
                 self.reset();
                 self.has_space_before = false;
                 self.at_start_of_line = false;
+                self.caret_needs_check = true;
             }
         } else {
             let len = self.current_word.chars().count();
             if len > 0 {
                 self.caret_offset = Some(len - 1);
+            } else {
+                self.reset();
+                self.has_space_before = false;
+                self.at_start_of_line = false;
+                self.caret_needs_check = true;
             }
         }
     }
@@ -192,11 +203,13 @@ impl Engine {
                 self.reset();
                 self.has_space_before = false;
                 self.at_start_of_line = false;
+                self.caret_needs_check = true;
             }
         } else {
             self.reset();
             self.has_space_before = false;
             self.at_start_of_line = false;
+            self.caret_needs_check = true;
         }
     }
 
@@ -206,6 +219,7 @@ impl Engine {
         self.last_word_before_space = None;
         self.last_char_typed = None;
         self.at_start_of_line = false;
+        self.caret_needs_check = true;
     }
 
     /// Xử lý một ký tự gõ vào

@@ -484,6 +484,9 @@ unsafe extern "system" fn low_level_keyboard_proc(
         }
         VK_UP | VK_DOWN => {
             reset_engine();
+            if let Ok(mut state) = GLOBAL_STATE.lock() {
+                state.engine.caret_needs_check = true;
+            }
             crate::automation::request_caret_refresh();
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             return CallNextHookEx(null_mut(), code, wparam, lparam);
@@ -491,6 +494,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
         VK_ESCAPE | VK_TAB | VK_HOME
         | VK_END | VK_PRIOR | VK_NEXT => {
             reset_engine();
+            if matches!(kbd.vkCode as u16, VK_HOME | VK_END | VK_PRIOR | VK_NEXT) {
+                if let Ok(mut state) = GLOBAL_STATE.lock() {
+                    state.engine.caret_needs_check = true;
+                }
+            }
             crate::automation::clear_cached_caret_word();
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             return CallNextHookEx(null_mut(), code, wparam, lparam);
@@ -511,6 +519,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 smart_english,
                 simple_telex,
                 is_empty,
+                caret_needs_check,
                 is_after_whitespace,
                 at_start_of_line,
             ) = {
@@ -524,23 +533,26 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     state.config.smart_english,
                     state.config.simple_telex,
                     state.engine.current_word.is_empty(),
+                    state.engine.caret_needs_check,
                     state.engine.last_char_typed.map_or(false, |c| c.is_whitespace()),
                     state.engine.at_start_of_line,
                 )
             };
 
-            // Kích hoạt sửa dấu tại con trỏ khi buffer trống, con trỏ ở sát chữ (KHÔNG ĐƯỢC đứng sau space, KHÔNG ĐƯỢC ở đầu dòng)
-            if enabled && dynamic_caret && is_empty && !at_start_of_line && !is_after_whitespace {
+            // Kích hoạt sửa dấu tại con trỏ CHỈ KHI người dùng vừa click chuột / điều hướng con trỏ (caret_needs_check)
+            if enabled && dynamic_caret && is_empty && caret_needs_check && !at_start_of_line && !is_after_whitespace {
+                // CHỈ các phím dấu thanh (s, f, r, x, j, z) hoặc dấu móc (w) mới là candidate!
+                // TUYỆT ĐỐI không bao gồm a, e, o, d vì đó là các chữ cái bắt đầu từ thông thường.
                 let is_candidate_key = if is_telex {
-                    matches!(ch, 's' | 'f' | 'r' | 'x' | 'j' | 'z' | 'a' | 'e' | 'o' | 'w' | 'd' |
-                                 'S' | 'F' | 'R' | 'X' | 'J' | 'Z' | 'A' | 'E' | 'O' | 'W' | 'D')
+                    matches!(ch, 's' | 'f' | 'r' | 'x' | 'j' | 'z' | 'w' |
+                                 'S' | 'F' | 'R' | 'X' | 'J' | 'Z' | 'W')
                 } else {
                     matches!(ch, '1'..='9' | '0')
                 };
 
                 if is_candidate_key {
-                    let caret_word_ctx = crate::automation::get_cached_caret_word()
-                        .or_else(|| crate::automation::get_caret_word_context());
+                    // CHỈ đọc từ cache nền (0ms latency, TUYỆT ĐỐI không gọi COM UIA đồng bộ trong hook!)
+                    let caret_word_ctx = crate::automation::get_cached_caret_word();
 
                     if let Some(ctx) = caret_word_ctx {
                         let target_word = &ctx.full_word;
@@ -598,6 +610,10 @@ unsafe extern "system" fn low_level_keyboard_proc(
                         return 1;
                     }
                 }
+            }
+            // Đã kiểm tra xong phím đầu tiên sau điều hướng con trỏ: xóa cờ để các phím sau gõ với tốc độ tối đa 0ms
+            if let Ok(mut state) = GLOBAL_STATE.lock() {
+                state.engine.caret_needs_check = false;
             }
         }
         crate::automation::clear_cached_caret_word();
