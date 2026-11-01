@@ -161,6 +161,8 @@ impl Engine {
                 self.raw_keys = raw;
                 self.has_transformed = transformed;
                 self.caret_offset = Some(len);
+                self.has_space_before = false;
+                self.at_start_of_line = false;
             }
         } else if let Some(offset) = self.caret_offset {
             if offset > 0 {
@@ -168,6 +170,8 @@ impl Engine {
             } else {
                 // Đã lùi vượt quá đầu từ -> xóa sạch buffer để dynamic caret nhận diện từ trước đó
                 self.reset();
+                self.has_space_before = false;
+                self.at_start_of_line = false;
             }
         } else {
             let len = self.current_word.chars().count();
@@ -186,7 +190,13 @@ impl Engine {
             } else {
                 // Đã tiến vượt quá cuối từ -> xóa sạch buffer để dynamic caret nhận diện từ tiếp theo
                 self.reset();
+                self.has_space_before = false;
+                self.at_start_of_line = false;
             }
+        } else {
+            self.reset();
+            self.has_space_before = false;
+            self.at_start_of_line = false;
         }
     }
 
@@ -194,6 +204,8 @@ impl Engine {
     pub fn on_mouse_click(&mut self) {
         self.reset();
         self.last_word_before_space = None;
+        self.has_space_before = false;
+        self.at_start_of_line = false;
     }
 
     /// Xử lý một ký tự gõ vào
@@ -267,6 +279,7 @@ impl Engine {
             self.saw_sentence_end_punct = false;
         }
 
+        self.has_space_before = false;
         self.has_typed_in_line = true;
         self.last_char_typed = Some(c);
         self.raw_keys.push(c);
