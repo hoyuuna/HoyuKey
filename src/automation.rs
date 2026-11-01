@@ -6,8 +6,8 @@ use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::System::Com::*;
 use windows_sys::Win32::UI::Accessibility::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, IsHungAppWindow, SendMessageW, WM_GETTEXT,
-    WM_GETTEXTLENGTH,
+    GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsHungAppWindow, SendMessageW,
+    WM_GETTEXT, WM_GETTEXTLENGTH,
 };
 
 #[link(name = "oleaut32")]
@@ -213,53 +213,59 @@ pub struct CaretWordContext {
     pub post_word: String,
 }
 
-/// Trích xuất từ và vị trí con trỏ từ một chuỗi văn bản và chỉ số vị trí con trỏ (character offset)
-pub fn extract_word_from_text_at_caret(text: &str, caret_char_offset: usize) -> Option<CaretWordContext> {
-    let chars: Vec<char> = text.chars().collect();
-    let n = chars.len();
-    if n == 0 {
-        return None;
-    }
-    let pos = caret_char_offset.min(n);
-
-    let is_word_char = |c: char| c.is_alphabetic() || c == '_';
-
-    let mut word_start = pos;
-    let mut word_end = pos;
-
-    if pos > 0 && is_word_char(chars[pos - 1]) {
-        // Con trỏ đang đứng ngay sau từ (ví dụ: "đây| ") hoặc đang nằm trong từ ("đ|ây")
-        while word_start > 0 && is_word_char(chars[word_start - 1]) {
-            word_start -= 1;
-        }
-        while word_end < n && is_word_char(chars[word_end]) {
-            word_end += 1;
-        }
-    } else if pos < n && is_word_char(chars[pos]) {
-        // Con trỏ đang đứng ở đầu từ: "|đây"
-        while word_start > 0 && is_word_char(chars[word_start - 1]) {
-            word_start -= 1;
-        }
-        while word_end < n && is_word_char(chars[word_end]) {
-            word_end += 1;
-        }
-    } else {
+/// Trích xuất từ tại vị trí con trỏ từ 2 chuỗi: chuỗi trước con trỏ và chuỗi sau con trỏ.
+/// QUY TẮC CỐT LÕI:
+/// 1. Vị trí con trỏ BẮT BUỘC phải tiếp giáp trực tiếp với chữ cái đứng trước nó.
+/// 2. Nếu trước con trỏ là khoảng trắng, đầu dòng, ký tự đặc biệt -> KHÔNG PHẢI đang sửa từ -> trả về None!
+/// 3. Từ tiếng Việt trích xuất chỉ bao gồm các ký tự chữ cái và độ dài từ 1..=10 ký tự.
+pub fn extract_context_from_pre_post(pre_str: &str, post_str: &str) -> Option<CaretWordContext> {
+    let last_pre = pre_str.chars().last()?;
+    if !last_pre.is_alphabetic() {
         return None;
     }
 
-    if word_start >= word_end {
+    let pre_word: String = pre_str
+        .chars()
+        .rev()
+        .take_while(|c| c.is_alphabetic())
+        .collect::<Vec<char>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    if pre_word.is_empty() {
         return None;
     }
 
-    let full_word: String = chars[word_start..word_end].iter().collect();
-    let pre_word: String = chars[word_start..pos].iter().collect();
-    let post_word: String = chars[pos..word_end].iter().collect();
+    let post_word: String = post_str
+        .chars()
+        .take_while(|c| c.is_alphabetic())
+        .collect();
+
+    let full_word = format!("{}{}", pre_word, post_word);
+    let len = full_word.chars().count();
+    if len == 0 || len > 10 {
+        return None;
+    }
 
     Some(CaretWordContext {
         full_word,
         pre_word,
         post_word,
     })
+}
+
+/// Trích xuất từ và vị trí con trỏ từ một chuỗi văn bản và chỉ số vị trí con trỏ (character offset)
+pub fn extract_word_from_text_at_caret(text: &str, caret_char_offset: usize) -> Option<CaretWordContext> {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n == 0 || caret_char_offset == 0 {
+        return None;
+    }
+    let pos = caret_char_offset.min(n);
+    let pre_str: String = chars[..pos].iter().collect();
+    let post_str: String = chars[pos..].iter().collect();
+    extract_context_from_pre_post(&pre_str, &post_str)
 }
 
 /// Cách 1: Đọc từ qua Win32 Edit / RichEdit control (Notepad, WordPad, hộp thoại Windows...)
@@ -280,6 +286,22 @@ fn get_win32_edit_caret_word(fg: HWND) -> Option<CaretWordContext> {
             return None;
         };
 
+        // BẮT BUỘC: Kiểm tra target_hwnd có thực sự là Edit / RichEdit control hay không!
+        // Tuyệt đối không gửi WM_GETTEXT tới các cửa sổ khác vì nó sẽ trả về Window Title (tiêu đề cửa sổ/tab)!
+        let mut class_buf = [0u16; 64];
+        let class_len = GetClassNameW(target_hwnd, class_buf.as_mut_ptr(), 64);
+        if class_len == 0 {
+            return None;
+        }
+        let class_name = String::from_utf16_lossy(&class_buf[..class_len as usize]).to_ascii_lowercase();
+        let is_edit = class_name == "edit"
+            || class_name.starts_with("richedit")
+            || class_name.starts_with("msftedit")
+            || class_name.contains("richedit");
+        if !is_edit {
+            return None;
+        }
+
         let mut start: u32 = 0;
         let mut end: u32 = 0;
         SendMessageW(
@@ -289,8 +311,13 @@ fn get_win32_edit_caret_word(fg: HWND) -> Option<CaretWordContext> {
             &mut end as *mut _ as isize,
         );
 
+        // Nếu con trỏ ở vị trí 0 (đầu văn bản) hoặc đang bôi đen vùng chọn (start != end): không can thiệp
+        if start != end || start == 0 {
+            return None;
+        }
+
         let len = SendMessageW(target_hwnd, WM_GETTEXTLENGTH, 0, 0) as usize;
-        if len == 0 || len > 65536 {
+        if len == 0 || len > 65536 || (start as usize) > len {
             return None;
         }
 
@@ -305,8 +332,10 @@ fn get_win32_edit_caret_word(fg: HWND) -> Option<CaretWordContext> {
             return None;
         }
 
-        let text = String::from_utf16_lossy(&buf[..copied]);
-        extract_word_from_text_at_caret(&text, start as usize)
+        let start_idx = (start as usize).min(copied);
+        let pre_str = String::from_utf16_lossy(&buf[..start_idx]);
+        let post_str = String::from_utf16_lossy(&buf[start_idx..copied]);
+        extract_context_from_pre_post(&pre_str, &post_str)
     }
 }
 
@@ -371,16 +400,6 @@ fn get_uia_caret_word() -> Option<CaretWordContext> {
         let word_range = ComPtr::<IUIAutomationTextRangeVtbl>::new(word_range_raw)?;
         let _ = (word_range.vtbl().ExpandToEnclosingUnit)(word_range.as_ptr(), TEXT_UNIT_WORD);
 
-        let mut bstr_full: *mut u16 = null_mut();
-        let hr = (word_range.vtbl().GetText)(word_range.as_ptr(), -1, &mut bstr_full);
-        let raw_full_text = if hr >= 0 {
-            let s = bstr_to_string(bstr_full);
-            SysFreeString(bstr_full);
-            s
-        } else {
-            return None;
-        };
-
         // Lấy đoạn từ đầu từ tới con trỏ
         let mut pre_range_raw: *mut c_void = null_mut();
         let hr = (caret_range.vtbl().Clone)(caret_range.as_ptr(), &mut pre_range_raw);
@@ -429,19 +448,7 @@ fn get_uia_caret_word() -> Option<CaretWordContext> {
             String::new()
         };
 
-        let full_clean = raw_full_text.trim();
-        if full_clean.is_empty() {
-            return None;
-        }
-
-        let pre_clean = raw_pre_text.trim_start();
-        let post_clean = raw_post_text.trim_end();
-
-        Some(CaretWordContext {
-            full_word: full_clean.to_string(),
-            pre_word: pre_clean.to_string(),
-            post_word: post_clean.to_string(),
-        })
+        extract_context_from_pre_post(&raw_pre_text, &raw_post_text)
     }
 }
 
@@ -488,5 +495,40 @@ mod tests {
         assert_eq!(ctx3.full_word, "đó");
         assert_eq!(ctx3.pre_word, "đó");
         assert_eq!(ctx3.post_word, "");
+    }
+
+    #[test]
+    fn test_caret_at_start_or_before_word_returns_none() {
+        // Con trỏ ở đầu văn bản (|Tao hoặc |đây) -> TUYỆT ĐỐI KHÔNG BIẾN ĐỔI!
+        assert_eq!(extract_word_from_text_at_caret("Tao", 0), None);
+        assert_eq!(extract_word_from_text_at_caret("đây là gì đó", 0), None);
+        assert_eq!(extract_word_from_text_at_caret("", 0), None);
+    }
+
+    #[test]
+    fn test_caret_after_space_or_punct_returns_none() {
+        // Con trỏ đứng sau dấu cách ("đây |") -> KHÔNG BIẾN ĐỔI!
+        assert_eq!(extract_word_from_text_at_caret("đây là ", 4), None);
+        assert_eq!(extract_word_from_text_at_caret("đây là ", 7), None);
+        assert_eq!(extract_word_from_text_at_caret("xong. ", 6), None);
+    }
+
+    #[test]
+    fn test_extract_context_from_pre_post() {
+        // Trường hợp con trỏ sau từ "tày"
+        let ctx = extract_context_from_pre_post("Hôm nay tày", "").unwrap();
+        assert_eq!(ctx.full_word, "tày");
+        assert_eq!(ctx.pre_word, "tày");
+        assert_eq!(ctx.post_word, "");
+
+        // Trường hợp con trỏ ở giữa "t|ày"
+        let ctx2 = extract_context_from_pre_post("t", "ày là gì").unwrap();
+        assert_eq!(ctx2.full_word, "tày");
+        assert_eq!(ctx2.pre_word, "t");
+        assert_eq!(ctx2.post_word, "ày");
+
+        // Trường hợp con trỏ sau khoảng trắng
+        assert_eq!(extract_context_from_pre_post("Tao ", ""), None);
+        assert_eq!(extract_context_from_pre_post("", "Tao"), None);
     }
 }

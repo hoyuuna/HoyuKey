@@ -506,11 +506,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
                 if is_candidate_key {
                     if let Some(ctx) = crate::automation::get_caret_word_context() {
-                        let target_word = if !ctx.full_word.is_empty() {
-                            &ctx.full_word
-                        } else {
-                            &ctx.pre_word
-                        };
+                        let target_word = &ctx.full_word;
 
                         let transformed = if is_telex {
                             crate::engine::telex::transform_telex(
