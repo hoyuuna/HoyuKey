@@ -1646,14 +1646,19 @@ mod tests {
 
         // Standard Telex:
         // uww -> uw
+        engine.reset();
         assert_eq!(simulate_type(&mut engine, &config, "uww"), "uw");
         // ww -> w
+        engine.reset();
         assert_eq!(simulate_type(&mut engine, &config, "ww"), "w");
         // tuww -> tuw
+        engine.reset();
         assert_eq!(simulate_type(&mut engine, &config, "tuww"), "tuw");
         // tww -> tw
+        engine.reset();
         assert_eq!(simulate_type(&mut engine, &config, "tww"), "tw");
         // chuyenr -> chuyển
+        engine.reset();
         assert_eq!(simulate_type(&mut engine, &config, "chuyenr"), "chuyển");
 
         // Simple Telex:
@@ -1661,10 +1666,13 @@ mod tests {
         simple_config.simple_telex = true;
 
         // uww -> uw in simple telex
+        engine.reset();
         assert_eq!(simulate_type(&mut engine, &simple_config, "uww"), "uw");
         // cuawr -> cửa in simple telex
+        engine.reset();
         assert_eq!(simulate_type(&mut engine, &simple_config, "cuawr"), "cửa");
         // chuyenr -> chuyển in simple telex
+        engine.reset();
         assert_eq!(simulate_type(&mut engine, &simple_config, "chuyenr"), "chuyển");
     }
 }
