@@ -371,6 +371,7 @@ impl Engine {
                     let text = self.raw_keys.clone();
                     self.current_word = text.clone();
                     self.has_transformed = false;
+                    self.caret_offset = Some(self.current_word.chars().count());
                     return KeyAction::Transform {
                         backspaces: bs,
                         text,
@@ -415,12 +416,14 @@ impl Engine {
                             let backspaces = self.current_word.chars().count();
                             self.current_word = rebalanced_word.clone();
                             self.has_transformed = true;
+                            self.caret_offset = Some(self.current_word.chars().count());
 
                             if config.auto_restore && !config.simple_telex && !is_valid_vietnamese_syllable(&self.current_word) {
                                 let bs = backspaces;
                                 let text = self.raw_keys.clone();
                                 self.current_word = text.clone();
                                 self.has_transformed = false;
+                                self.caret_offset = Some(self.current_word.chars().count());
                                 return KeyAction::Transform {
                                     backspaces: bs,
                                     text,
@@ -455,6 +458,7 @@ impl Engine {
                     let text = self.raw_keys.clone();
                     self.current_word = text.clone();
                     self.has_transformed = false;
+                    self.caret_offset = Some(self.current_word.chars().count());
                     return KeyAction::Transform {
                         backspaces,
                         text,
@@ -859,7 +863,7 @@ mod tests {
 
         // 3. khuỵu:
         assert_eq!(type_word("khuyuj"), "khuỵu");
-        assert_eq!(type_word("khuyuju"), "khuỵu");
+        assert_eq!(type_word("khuyju"), "khuỵu");
 
         // 4. ngoẻo:
         assert_eq!(type_word("ngoero"), "ngoẻo");
