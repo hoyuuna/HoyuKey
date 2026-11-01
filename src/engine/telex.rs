@@ -229,8 +229,50 @@ fn handle_vowel_modifier(
         }
     }
 
-    // 2. Xử lý 'uow' / 'ươ' và 'uaw' / 'ưa' khi gặp 'w'
+    // 2. Xử lý 'uow' / 'ươ', 'uaw' / 'ưa', và 'uuw' / 'ưu' khi gặp 'w'
     if key == 'w' {
+        // Xử lý 'uu' + 'w' -> 'ưu' (ví dụ: 'uu' + 'w' -> 'ưu', 'luu' + 'w' -> 'lưu', 'muu' + 'w' -> 'mưu')
+        let mut found_uu = None;
+        for i in 0..chars.len().saturating_sub(1) {
+            if i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
+                continue;
+            }
+            let c1 = chars[i].to_ascii_lowercase();
+            let c2 = chars[i + 1].to_ascii_lowercase();
+            if (c1 == 'u' || c1 == 'ư') && c2 == 'u' {
+                found_uu = Some(i);
+                break;
+            }
+        }
+
+        if let Some(i) = found_uu {
+            let (_, m1, t1, u1) = decompose_vietnamese_char(chars[i]).unwrap_or(('u', VowelMod::None, Tone::None, false));
+            let (_, _, t2, u2) = decompose_vietnamese_char(chars[i + 1]).unwrap_or(('u', VowelMod::None, Tone::None, false));
+
+            if m1 == VowelMod::Horn {
+                if simple_telex {
+                    return None;
+                }
+                // Đã là 'ưu', gõ tiếp 'w' -> hoàn tác thành 'uu' và chèn 'w' (ví dụ: 'ưu' + 'w' -> 'uuw')
+                let mut new_chars = chars.clone();
+                let restored_u = get_vietnamese_vowel('u', VowelMod::None, t1).unwrap_or('u');
+                let restored_u = if u1 { restored_u.to_uppercase().next().unwrap_or(restored_u) } else { restored_u };
+                new_chars[i] = restored_u;
+                new_chars.push(if is_upper { 'W' } else { 'w' });
+                return Some(new_chars.into_iter().collect());
+            } else {
+                // Đang là 'uu', biến thành 'ưu'
+                let mut new_chars = chars.clone();
+                let new_u = get_vietnamese_vowel('u', VowelMod::Horn, t1).unwrap_or('ư');
+                let new_u = if u1 { new_u.to_uppercase().next().unwrap_or(new_u) } else { new_u };
+                let new_u2 = get_vietnamese_vowel('u', VowelMod::None, t2).unwrap_or('u');
+                let new_u2 = if u2 { new_u2.to_uppercase().next().unwrap_or(new_u2) } else { new_u2 };
+                new_chars[i] = new_u;
+                new_chars[i + 1] = new_u2;
+                return Some(new_chars.into_iter().collect());
+            }
+        }
+
         // Xử lý 'ua' + 'w' -> 'ưa' (ví dụ: 'cua' + 'w' -> 'cưa', 'mua' + 'w' -> 'mưa', 'chua' + 'w' -> 'chưa')
         // Áp dụng cho cả Telex thường và Telex giản lược
         let mut found_ua = None;
@@ -341,7 +383,7 @@ fn handle_vowel_modifier(
                 ('o', VowelMod::None, 'o') => Some(VowelMod::Hat),
                 ('o', VowelMod::None, 'w') => Some(VowelMod::Horn),
                 ('u', VowelMod::None, 'w') => {
-                    if last_idx > 0 && chars[last_idx - 1].to_ascii_lowercase() == 'q' {
+                    if last_idx > 0 && (chars[last_idx - 1].to_ascii_lowercase() == 'q' || chars[last_idx - 1].to_ascii_lowercase() == 'u') {
                         None
                     } else {
                         Some(VowelMod::Horn)
@@ -407,7 +449,7 @@ fn handle_vowel_modifier(
                             ('o', VowelMod::None, 'o') => Some(VowelMod::Hat),
                             ('o', VowelMod::None, 'w') => Some(VowelMod::Horn),
                             ('u', VowelMod::None, 'w') => {
-                                if idx > 0 && chars[idx - 1].to_ascii_lowercase() == 'q' {
+                                if idx > 0 && (chars[idx - 1].to_ascii_lowercase() == 'q' || chars[idx - 1].to_ascii_lowercase() == 'u') {
                                     None
                                 } else {
                                     Some(VowelMod::Horn)

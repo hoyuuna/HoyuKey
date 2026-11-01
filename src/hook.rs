@@ -357,6 +357,18 @@ unsafe extern "system" fn low_level_keyboard_proc(
         return CallNextHookEx(null_mut(), code, wparam, lparam);
     }
 
+    // Nếu đang trong quá trình bôi đen & đọc clipboard của Cách 2:
+    // Người dùng tiếp tục gõ -> lập tức hủy bôi đen và đưa ký tự vào hàng đợi để giữ đúng 100% thứ tự gõ!
+    if REPLACING.load(Ordering::SeqCst) {
+        CANCEL_REPLACEMENT.store(true, Ordering::SeqCst);
+        if let Some(c) = vk_to_char(kbd.vkCode, kbd.scanCode) {
+            PENDING_CHARS.lock().unwrap().push(c);
+            BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
+            return 1;
+        }
+        return CallNextHookEx(null_mut(), code, wparam, lparam);
+    }
+
     // 3. Theo dõi auto-repeat khi người dùng giữ phím
     let repeat_count = if LAST_PHYSICAL_VK.load(Ordering::Relaxed) == kbd.vkCode {
         KEY_REPEAT_COUNT.fetch_add(1, Ordering::Relaxed) + 1
@@ -541,11 +553,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
             // Kích hoạt sửa dấu tại con trỏ CHỈ KHI người dùng vừa click chuột / điều hướng con trỏ (caret_needs_check)
             if enabled && dynamic_caret && is_empty && caret_needs_check && !at_start_of_line && !is_after_whitespace {
-                // CHỈ các phím dấu thanh (s, f, r, x, j, z) hoặc dấu móc (w) mới là candidate!
-                // TUYỆT ĐỐI không bao gồm a, e, o, d vì đó là các chữ cái bắt đầu từ thông thường.
+                // CHỈ các phím dấu thanh (s, f, r, x, j, z) mới là candidate!
+                // TUYỆT ĐỐI không bao gồm w, a, e, o, d vì đó là các chữ cái bắt đầu từ thông thường.
                 let is_candidate_key = if is_telex {
-                    matches!(ch, 's' | 'f' | 'r' | 'x' | 'j' | 'z' | 'w' |
-                                 'S' | 'F' | 'R' | 'X' | 'J' | 'Z' | 'W')
+                    matches!(ch, 's' | 'f' | 'r' | 'x' | 'j' | 'z' |
+                                 'S' | 'F' | 'R' | 'X' | 'J' | 'Z')
                 } else {
                     matches!(ch, '1'..='9' | '0')
                 };
@@ -1108,6 +1120,8 @@ unsafe fn send_replace_text(text: &str) {
 }
 
 static REPLACING: AtomicBool = AtomicBool::new(false);
+static CANCEL_REPLACEMENT: AtomicBool = AtomicBool::new(false);
+static PENDING_CHARS: Mutex<Vec<char>> = Mutex::new(Vec::new());
 
 fn trigger_selection_replacement(
     ch: char,
@@ -1120,6 +1134,8 @@ fn trigger_selection_replacement(
     if REPLACING.swap(true, Ordering::SeqCst) {
         return;
     }
+    CANCEL_REPLACEMENT.store(false, Ordering::SeqCst);
+    PENDING_CHARS.lock().unwrap().clear();
 
     std::thread::spawn(move || {
         perform_selection_replacement(
@@ -1131,6 +1147,7 @@ fn trigger_selection_replacement(
             simple_telex,
         );
         REPLACING.store(false, Ordering::SeqCst);
+        CANCEL_REPLACEMENT.store(false, Ordering::SeqCst);
     });
 }
 
@@ -1154,7 +1171,7 @@ fn perform_selection_replacement(
 
         // 3. Gửi Ctrl + Shift + Left để bôi đen từ trước con trỏ
         send_key_combo(&[VK_CONTROL, VK_SHIFT, VK_LEFT]);
-        // BẮT BUỘC: Nghỉ 20ms để ứng dụng (Chrome, Discord...) kịp thời cập nhật vùng chọn
+        // Nghỉ 20ms để ứng dụng (Chrome, Discord...) kịp thời cập nhật vùng chọn
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         // Gửi Ctrl + C để copy từ đã bôi đen
@@ -1163,6 +1180,9 @@ fn perform_selection_replacement(
         // 4. Chờ ứng dụng đưa dữ liệu vào clipboard (tối đa 60ms)
         let mut copied = None;
         for _ in 0..12 {
+            if CANCEL_REPLACEMENT.load(Ordering::SeqCst) {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
             if let Some(text) = get_clipboard_text() {
                 if !text.is_empty() {
@@ -1172,40 +1192,43 @@ fn perform_selection_replacement(
             }
         }
 
+        let is_canceled = CANCEL_REPLACEMENT.load(Ordering::SeqCst);
         let mut transformed_word = None;
-        if let Some(ref text) = copied {
-            // NGUYÊN TẮC: Con trỏ BẮT BUỘC phải tiếp giáp trực tiếp (sát chữ).
-            // Nếu ký tự cuối cùng của chuỗi bôi đen là khoảng trắng hoặc không phải chữ cái:
-            // Nghĩa là con trỏ đang đứng sau dấu cách -> TUYỆT ĐỐI KHÔNG BIẾN ĐỔI!
-            let is_touching_letter = text.chars().last().map_or(false, |c| c.is_alphabetic());
-            if is_touching_letter {
-                let trimmed = text.trim();
-                if !trimmed.is_empty()
-                    && trimmed.chars().count() <= 10
-                    && trimmed.chars().all(|c| c.is_alphabetic())
-                {
-                    let res = if is_telex {
-                        crate::engine::telex::transform_telex(
-                            trimmed,
-                            ch,
-                            modern_tone,
-                            free_marking,
-                            smart_english,
-                            simple_telex,
-                            None,
-                        )
-                    } else {
-                        crate::engine::vni::transform_vni(
-                            trimmed,
-                            ch,
-                            modern_tone,
-                            free_marking,
-                            smart_english,
-                        )
-                    };
-                    if let Some(new_w) = res {
-                        if new_w != trimmed {
-                            transformed_word = Some(new_w);
+        if !is_canceled {
+            if let Some(ref text) = copied {
+                // NGUYÊN TẮC: Con trỏ BẮT BUỘC phải tiếp giáp trực tiếp (sát chữ).
+                // Nếu ký tự cuối cùng của chuỗi bôi đen là khoảng trắng hoặc không phải chữ cái:
+                // Nghĩa là con trỏ đang đứng sau dấu cách -> TUYỆT ĐỐI KHÔNG BIẾN ĐỔI!
+                let is_touching_letter = text.chars().last().map_or(false, |c| c.is_alphabetic());
+                if is_touching_letter {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty()
+                        && trimmed.chars().count() <= 10
+                        && trimmed.chars().all(|c| c.is_alphabetic())
+                    {
+                        let res = if is_telex {
+                            crate::engine::telex::transform_telex(
+                                trimmed,
+                                ch,
+                                modern_tone,
+                                free_marking,
+                                smart_english,
+                                simple_telex,
+                                None,
+                            )
+                        } else {
+                            crate::engine::vni::transform_vni(
+                                trimmed,
+                                ch,
+                                modern_tone,
+                                free_marking,
+                                smart_english,
+                            )
+                        };
+                        if let Some(new_w) = res {
+                            if new_w != trimmed {
+                                transformed_word = Some(new_w);
+                            }
                         }
                     }
                 }
@@ -1228,29 +1251,50 @@ fn perform_selection_replacement(
                 state.engine.at_start_of_line = false;
                 state.engine.caret_offset = Some(new_word.chars().count());
             }
+
+            // Xử lý các ký tự người dùng đã gõ trong lúc chờ dán
+            let pending: Vec<char> = PENDING_CHARS.lock().unwrap().drain(..).collect();
+            for c in pending {
+                let action = if let Ok(mut state) = GLOBAL_STATE.lock() {
+                    let s = &mut *state;
+                    s.engine.process_char(c, &s.config)
+                } else {
+                    KeyAction::PassThrough
+                };
+                match action {
+                    KeyAction::Transform { backspaces, text } => send_transform_batch(backspaces, &text),
+                    KeyAction::TransformCaret { deletes, backspaces, text } => send_replace_batch(deletes, backspaces, &text),
+                    _ => send_replace_text(&c.to_string()),
+                }
+            }
         } else {
-            // Không phải từ hợp lệ hoặc không biến đổi:
+            // Bị hủy do người dùng đang gõ tiếp, hoặc không phải từ hợp lệ:
             // 1. Gửi phím Right Arrow để hủy bôi đen và đưa con trỏ về vị trí ban đầu
             send_single_key(VK_RIGHT);
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(5));
 
-            // 2. Chuyển phím gốc qua engine để thực hiện đúng quy tắc gõ (ví dụ w -> ư, s -> s)
-            let action = if let Ok(mut state) = GLOBAL_STATE.lock() {
-                let s = &mut *state;
-                s.engine.process_char(ch, &s.config)
-            } else {
-                KeyAction::PassThrough
-            };
+            // 2. Chuyển phím gốc ch và toàn bộ phím người dùng đã gõ theo ĐÚNG THỨ TỰ TUẦN TỰ
+            let mut chars_to_process = vec![ch];
+            chars_to_process.extend(PENDING_CHARS.lock().unwrap().drain(..));
 
-            match action {
-                KeyAction::Transform { backspaces, text } => {
-                    send_transform_batch(backspaces, &text);
-                }
-                KeyAction::TransformCaret { deletes, backspaces, text } => {
-                    send_replace_batch(deletes, backspaces, &text);
-                }
-                KeyAction::PassThrough | KeyAction::Reset | KeyAction::Backspace => {
-                    send_replace_text(&ch.to_string());
+            for c in chars_to_process {
+                let action = if let Ok(mut state) = GLOBAL_STATE.lock() {
+                    let s = &mut *state;
+                    s.engine.process_char(c, &s.config)
+                } else {
+                    KeyAction::PassThrough
+                };
+
+                match action {
+                    KeyAction::Transform { backspaces, text } => {
+                        send_transform_batch(backspaces, &text);
+                    }
+                    KeyAction::TransformCaret { deletes, backspaces, text } => {
+                        send_replace_batch(deletes, backspaces, &text);
+                    }
+                    KeyAction::PassThrough | KeyAction::Reset | KeyAction::Backspace => {
+                        send_replace_text(&c.to_string());
+                    }
                 }
             }
         }

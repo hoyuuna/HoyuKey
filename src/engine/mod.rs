@@ -1690,6 +1690,25 @@ mod tests {
         engine.reset();
         assert_eq!(simulate_type(&mut engine, &config, "chuyeenr"), "chuyển");
 
+        // uuw -> ưu (không phải uư)
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "uuw"), "ưu");
+        // luuw -> lưu
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "luuw"), "lưu");
+        // cuuws -> cứu
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "cuuws"), "cứu");
+        // cuuwf -> cừu
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "cuuwf"), "cừu");
+        // uuww -> uuw (undo)
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "uuww"), "uuw");
+        // Uuw -> Ưu
+        engine.reset();
+        assert_eq!(simulate_type(&mut engine, &config, "Uuw"), "Ưu");
+
         // Simple Telex:
         let mut simple_config = Config::default();
         simple_config.simple_telex = true;
