@@ -457,18 +457,19 @@ unsafe extern "system" fn low_level_keyboard_proc(
     match kbd.vkCode as u16 {
         VK_BACK => {
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
-            let (bs_action, has_space_before, browser_compat) = {
+            let (bs_action, has_space_before, browser_compat, browser_apps) = {
                 let mut state = GLOBAL_STATE.lock().unwrap();
                 let simple_telex = state.config.simple_telex;
                 let browser_compat = state.config.browser_compatibility;
+                let browser_apps = state.config.browser_apps.clone();
                 let bs_action = state.engine.handle_backspace(simple_telex);
                 let has_space_before = state.engine.has_space_before;
-                (bs_action, has_space_before, browser_compat)
+                (bs_action, has_space_before, browser_compat, browser_apps)
             };
 
             if let Some(KeyAction::Transform { backspaces, text }) = bs_action {
                 BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
-                send_transform_batch(backspaces, &text, has_space_before, browser_compat);
+                send_transform_batch(backspaces, &text, has_space_before, browser_compat, &browser_apps);
                 return 1;
             } else {
                 return CallNextHookEx(null_mut(), code, wparam, lparam);
@@ -650,7 +651,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
         crate::automation::clear_cached_caret_word();
 
         // Xử lý biến đổi ký tự thông qua engine (chỉ lock 1 lần duy nhất, lấy kết quả và mở khóa ngay)
-        let (action, has_space_before, browser_compatibility) = {
+        let (action, has_space_before, browser_compatibility, browser_apps) = {
             let mut state = GLOBAL_STATE.lock().unwrap();
             let state = &mut *state;
             let action = if repeat_count >= 3 {
@@ -661,13 +662,14 @@ unsafe extern "system" fn low_level_keyboard_proc(
             };
             let has_space_before = state.engine.has_space_before;
             let browser_compatibility = state.config.browser_compatibility;
-            (action, has_space_before, browser_compatibility)
+            let browser_apps = state.config.browser_apps.clone();
+            (action, has_space_before, browser_compatibility, browser_apps)
         };
 
         match action {
             KeyAction::Transform { backspaces, text } => {
                 BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
-                send_transform_batch(backspaces, &text, has_space_before, browser_compatibility);
+                send_transform_batch(backspaces, &text, has_space_before, browser_compatibility, &browser_apps);
                 return 1;
             }
             KeyAction::TransformCaret { deletes, backspaces, text } => {
@@ -889,13 +891,65 @@ unsafe fn send_replace_batch(deletes: usize, backspaces: usize, text: &str) {
 
 use crate::automation::{GetGUIThreadInfo, GUITHREADINFO};
 
+static LAST_CHECKED_HWND: AtomicIsize = AtomicIsize::new(0);
+static LAST_CHECKED_IS_BROWSER: AtomicBool = AtomicBool::new(false);
+
+unsafe fn is_foreground_browser_app(browser_apps: &str) -> bool {
+    let hwnd = GetForegroundWindow();
+    if hwnd.is_null() {
+        return false;
+    }
+
+    let last = LAST_CHECKED_HWND.load(Ordering::Relaxed);
+    if last == hwnd as isize {
+        return LAST_CHECKED_IS_BROWSER.load(Ordering::Relaxed);
+    }
+
+    let mut pid: u32 = 0;
+    let tid = GetWindowThreadProcessId(hwnd, &mut pid);
+    if tid == 0 || pid == 0 {
+        return false;
+    }
+
+    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if process.is_null() {
+        return false;
+    }
+
+    let mut path_buf = [0u16; 1024];
+    let mut size = path_buf.len() as u32;
+    let ok = QueryFullProcessImageNameW(process, 0, path_buf.as_mut_ptr(), &mut size);
+    CloseHandle(process);
+
+    let is_browser = if ok != 0 && size > 0 {
+        let full_path = String::from_utf16_lossy(&path_buf[..size as usize]);
+        let exe_name = std::path::Path::new(&full_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        browser_apps.split(',').any(|app| {
+            let app = app.trim().to_ascii_lowercase();
+            !app.is_empty() && (exe_name == app || exe_name == format!("{}.exe", app))
+        })
+    } else {
+        false
+    };
+
+    LAST_CHECKED_HWND.store(hwnd as isize, Ordering::Relaxed);
+    LAST_CHECKED_IS_BROWSER.store(is_browser, Ordering::Relaxed);
+    is_browser
+}
+
 unsafe fn is_focused_in_web_content() -> bool {
     let hwnd = GetForegroundWindow();
     if hwnd.is_null() {
         return false;
     }
 
-    let tid = GetWindowThreadProcessId(hwnd, null_mut());
+    let mut pid: u32 = 0;
+    let tid = GetWindowThreadProcessId(hwnd, &mut pid);
     if tid == 0 {
         return false;
     }
@@ -904,7 +958,7 @@ unsafe fn is_focused_in_web_content() -> bool {
     gui_info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
 
     if GetGUIThreadInfo(tid, &mut gui_info) != 0 && !gui_info.hwndFocus.is_null() {
-        let mut class_buf = [0u16; 64];
+        let mut class_buf = [0u16; 256];
         let len = GetClassNameW(gui_info.hwndFocus, class_buf.as_mut_ptr(), class_buf.len() as i32);
         if len > 0 {
             let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
@@ -921,18 +975,19 @@ unsafe fn is_focused_in_web_content() -> bool {
 
 /// Gửi chuỗi Backspace và Unicode Text nguyên tử (Atomic SendInput).
 /// Gửi chuẩn Win32 API tương thích hoàn hảo với mọi ứng dụng, trình duyệt Chrome, Edge, Firefox, Word, Excel.
-/// Không bao giờ mở process handle hay gọi Win32 API nặng trong hook phím (0ms latency).
+/// Tự động cache theo HWND cửa sổ foreground để đạt tốc độ 0ms không gọi OpenProcess lặp lại.
 unsafe fn send_transform_batch(
     backspaces: usize,
     text: &str,
     has_space_before: bool,
     browser_compatibility: bool,
+    browser_apps: &str,
 ) {
     if backspaces == 0 && text.is_empty() {
         return;
     }
 
-    let is_browser = browser_compatibility && IS_CURRENT_APP_BROWSER.load(Ordering::Relaxed);
+    let is_browser = browser_compatibility && is_foreground_browser_app(browser_apps);
     // Khi người dùng gõ trên thanh địa chỉ trình duyệt (Chrome, Edge, Brave, Cốc Cốc, Opera):
     // Trình duyệt tự động bôi đen (inline selection) gợi ý URL/tìm kiếm đầu tiên.
     // Nếu chưa có dấu cách (!has_space_before) và không phải trong nội dung web (!is_focused_in_web_content):
