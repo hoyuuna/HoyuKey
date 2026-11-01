@@ -412,6 +412,11 @@ fn handle_vni_tone(word: &str, key: char, modern_tone: bool) -> Option<String> {
         }
     }
 
+    // Nếu gõ '0' (bỏ dấu) nhưng từ hiện tại không có dấu thanh nào để bỏ -> không biến đổi
+    if target_tone == Tone::None && current_tone == Tone::None {
+        return None;
+    }
+
     // Undo nếu gõ lại cùng phím số dấu
     if target_tone == current_tone && target_tone != Tone::None {
         let mut new_chars = chars.clone();
@@ -469,5 +474,10 @@ fn handle_vni_tone(word: &str, key: char, modern_tone: bool) -> Option<String> {
         new_chars[idx] = if is_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
     }
 
-    Some(new_chars.into_iter().collect())
+    let res: String = new_chars.into_iter().collect();
+    if res == word {
+        return None;
+    }
+
+    Some(res)
 }

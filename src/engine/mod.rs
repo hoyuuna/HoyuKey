@@ -659,6 +659,28 @@ mod tests {
     }
 
     #[test]
+    fn test_telex_z_tone_canceling() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // 1. Gõ "maz" khi chưa có dấu -> không nuốt 'z', ra "maz"
+        for ch in "maz".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "maz");
+
+        // 2. Gõ "mas" -> "má", rồi gõ 'z' -> xóa dấu ra "ma"
+        engine.reset();
+        for ch in "mas".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "má");
+
+        engine.process_char('z', &config);
+        assert_eq!(engine.current_word, "ma");
+    }
+
+    #[test]
     fn test_telex_chuyen() {
         let mut engine = Engine::new();
         let config = Config::default();

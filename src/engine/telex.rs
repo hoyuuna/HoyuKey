@@ -484,6 +484,11 @@ pub fn handle_tone_modifier(word: &str, key: char, modern_tone: bool, simple_tel
         }
     }
 
+    // Nếu gõ 'z' (bỏ dấu) nhưng từ hiện tại không có dấu thanh nào để bỏ -> không biến đổi
+    if target_tone == Tone::None && current_tone == Tone::None {
+        return None;
+    }
+
     // 1. Hoàn tác nếu gõ lặp lại cùng phím dấu thanh (ví dụ 'toán' + 's' -> 'toans', 'DÁ' + 'S' -> 'DAS', 'DÁ' + 's' -> 'DAs')
     if target_tone == current_tone && target_tone != Tone::None {
         if simple_telex {
@@ -511,7 +516,12 @@ pub fn handle_tone_modifier(word: &str, key: char, modern_tone: bool, simple_tel
         new_chars[idx] = if is_upper { new_vowel.to_uppercase().next().unwrap_or(new_vowel) } else { new_vowel };
     }
 
-    Some(new_chars.into_iter().collect())
+    let res: String = new_chars.into_iter().collect();
+    if res == word {
+        return None;
+    }
+
+    Some(res)
 }
 
 /// Trích xuất danh sách vị trí nguyên âm thực sự trong từ tiếng Việt.

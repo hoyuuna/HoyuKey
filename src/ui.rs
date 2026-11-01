@@ -1685,15 +1685,15 @@ unsafe fn render_page_elements(
             let telex_title_color = if is_vni { ARGB_STATUS_MUTED } else { ARGB_TEXT_PRIMARY };
             let telex_desc_color = if is_vni { 0x50808080 } else { ARGB_TEXT_MUTED };
             draw_gdip_text(graphics, font_bold, "Telex giản lược", left_text, 548 - sy, telex_title_color, false);
-            draw_gdip_text(graphics, font_desc, "w đơn lẻ ra w, uow ra uơ, không hoàn tác dấu lặp", left_text, 572 - sy, telex_desc_color, false);
+            draw_gdip_text(graphics, font_desc, "Không hoàn tác dấu, phím w đứng riêng ra chữ w", left_text, 572 - sy, telex_desc_color, false);
             let simple_progress = if is_vni { 0.0 } else { SIMPLE_TELEX_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0 };
             draw_animated_switch(graphics, right_ctrl - 50, 554 - sy, simple_progress);
 
             gdiplus_draw_line(graphics, left_text, 606 - sy, right_ctrl, 606 - sy, ARGB_DIVIDER, 1.0);
 
-            // 7. Sửa dấu tự do tại con trỏ (UI Automation)
-            draw_gdip_text(graphics, font_bold, "Sửa dấu tự do tại con trỏ", left_text, 620 - sy, ARGB_TEXT_PRIMARY, false);
-            draw_gdip_text(graphics, font_desc, "Nhận diện từ khi click chuột/mũi tên để sửa dấu (UI Automation)", left_text, 644 - sy, ARGB_TEXT_MUTED, false);
+            // 7. Sửa dấu tại con trỏ
+            draw_gdip_text(graphics, font_bold, "Sửa dấu tại con trỏ", left_text, 620 - sy, ARGB_TEXT_PRIMARY, false);
+            draw_gdip_text(graphics, font_desc, "Sửa hoặc đổi dấu khi click chuột hoặc bấm phím mũi tên", left_text, 644 - sy, ARGB_TEXT_MUTED, false);
             let caret_progress = DYNAMIC_CARET_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, 626 - sy, caret_progress);
 

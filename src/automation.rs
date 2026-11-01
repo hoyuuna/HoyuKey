@@ -224,6 +224,14 @@ pub fn extract_context_from_pre_post(pre_str: &str, post_str: &str) -> Option<Ca
         return None;
     }
 
+    // Nếu con trỏ đang ở giữa một từ (ký tự ngay sau con trỏ là chữ cái, ví dụ 't|ày') -> KHÔNG can thiệp sửa dấu!
+    // Người dùng muốn chèn chữ vào giữa từ (ví dụ 't|ày' + 's' -> 'tsày'), tuyệt đối không đổi thành 'táy'.
+    if let Some(first_post) = post_str.chars().next() {
+        if first_post.is_alphabetic() {
+            return None;
+        }
+    }
+
     let pre_word: String = pre_str
         .chars()
         .rev()
@@ -237,12 +245,8 @@ pub fn extract_context_from_pre_post(pre_str: &str, post_str: &str) -> Option<Ca
         return None;
     }
 
-    let post_word: String = post_str
-        .chars()
-        .take_while(|c| c.is_alphabetic())
-        .collect();
-
-    let full_word = format!("{}{}", pre_word, post_word);
+    let post_word = String::new();
+    let full_word = pre_word.clone();
     let len = full_word.chars().count();
     if len == 0 || len > 10 {
         return None;
@@ -365,7 +369,11 @@ fn get_uia_caret_word() -> Option<CaretWordContext> {
         let elem = ComPtr::<IUIAutomationElementVtbl>::new(elem_raw)?;
 
         let mut pat_raw: *mut c_void = null_mut();
-        let hr = (elem.vtbl().GetCurrentPattern)(elem.as_ptr(), UIA_TEXT_PATTERN_ID, &mut pat_raw);
+        let mut hr = (elem.vtbl().GetCurrentPattern)(elem.as_ptr(), UIA_TEXT_PATTERN_ID, &mut pat_raw);
+        if hr < 0 || pat_raw.is_null() {
+            // Dự phòng TextPattern2 (ID 10024) cho các ứng dụng hiện đại (Chromium, Edge...)
+            hr = (elem.vtbl().GetCurrentPattern)(elem.as_ptr(), 10024, &mut pat_raw);
+        }
         if hr < 0 || pat_raw.is_null() {
             return None;
         }
@@ -484,11 +492,8 @@ mod tests {
         assert_eq!(ctx.pre_word, "đây");
         assert_eq!(ctx.post_word, "");
 
-        // Con trỏ đứng ở giữa: "đ|ây" (char index 1)
-        let ctx2 = extract_word_from_text_at_caret(text, 1).unwrap();
-        assert_eq!(ctx2.full_word, "đây");
-        assert_eq!(ctx2.pre_word, "đ");
-        assert_eq!(ctx2.post_word, "ây");
+        // Con trỏ đứng ở giữa: "đ|ây" (char index 1) -> KHÔNG can thiệp, để người dùng gõ chèn chữ tự nhiên
+        assert_eq!(extract_word_from_text_at_caret(text, 1), None);
 
         // Con trỏ đứng ở từ "đó" (char index 12)
         let ctx3 = extract_word_from_text_at_caret(text, 12).unwrap();
@@ -521,11 +526,8 @@ mod tests {
         assert_eq!(ctx.pre_word, "tày");
         assert_eq!(ctx.post_word, "");
 
-        // Trường hợp con trỏ ở giữa "t|ày"
-        let ctx2 = extract_context_from_pre_post("t", "ày là gì").unwrap();
-        assert_eq!(ctx2.full_word, "tày");
-        assert_eq!(ctx2.pre_word, "t");
-        assert_eq!(ctx2.post_word, "ày");
+        // Trường hợp con trỏ ở giữa "t|ày" -> KHÔNG sửa dấu (để gõ chèn chữ như tsày)
+        assert_eq!(extract_context_from_pre_post("t", "ày là gì"), None);
 
         // Trường hợp con trỏ sau khoảng trắng
         assert_eq!(extract_context_from_pre_post("Tao ", ""), None);
