@@ -538,6 +538,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                                 free_marking,
                                 smart_english,
                                 simple_telex,
+                                None,
                             )
                         } else {
                             crate::engine::vni::transform_vni(
@@ -1033,6 +1034,7 @@ fn perform_selection_replacement(
                         free_marking,
                         smart_english,
                         simple_telex,
+                        None,
                     )
                 } else {
                     crate::engine::vni::transform_vni(

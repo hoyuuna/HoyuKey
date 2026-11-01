@@ -429,42 +429,7 @@ fn handle_vni_tone(word: &str, key: char, modern_tone: bool) -> Option<String> {
         return Some(new_chars.into_iter().collect());
     }
 
-    let count = vowel_indices.len();
-    let target_idx = if count == 1 {
-        vowel_indices[0]
-    } else if count >= 3 {
-        vowel_indices[1] // Triphthong: luôn ở giữa (ví dụ ngoài, xoài)
-    } else {
-        let mut modified = None;
-        for &idx in &vowel_indices {
-            if let Some((_, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
-                if vmod != VowelMod::None {
-                    modified = Some(idx);
-                }
-            }
-        }
-        if let Some(m) = modified {
-            m
-        } else {
-            let last_idx = *vowel_indices.last().unwrap();
-            let has_ending = last_idx < chars.len() - 1;
-            if has_ending {
-                vowel_indices[1]
-            } else if modern_tone {
-                let s: String = vowel_indices
-                    .iter()
-                    .filter_map(|&i| decompose_vietnamese_char(chars[i]).map(|(base, _, _, _)| base))
-                    .collect();
-                if matches!(s.as_str(), "oa" | "oe" | "uy") {
-                    vowel_indices[1]
-                } else {
-                    vowel_indices[0]
-                }
-            } else {
-                vowel_indices[0]
-            }
-        }
-    };
+    let target_idx = super::telex::select_tone_vowel_index(&chars, &vowel_indices, modern_tone);
 
     let mut new_chars = chars.clone();
     for &idx in &vowel_indices {

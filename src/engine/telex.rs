@@ -7,6 +7,7 @@ pub fn transform_telex(
     free_marking: bool,
     smart_english: bool,
     simple_telex: bool,
+    raw_keys: Option<&str>,
 ) -> Option<String> {
     let key_lower = key.to_ascii_lowercase();
     let is_key_upper = key.is_ascii_uppercase();
@@ -26,7 +27,7 @@ pub fn transform_telex(
 
     // 2. Xử lý dấu mũ/móc/trăng: 'a', 'e', 'o', 'w'
     if matches!(key_lower, 'a' | 'e' | 'o' | 'w') {
-        if let Some(res) = handle_vowel_modifier(word, key_lower, is_key_upper, free_marking, simple_telex) {
+        if let Some(res) = handle_vowel_modifier(word, key_lower, is_key_upper, free_marking, simple_telex, raw_keys) {
             return Some(res);
         }
     }
@@ -147,7 +148,14 @@ fn handle_d_modifier(word: &str, is_upper: bool, free_marking: bool, simple_tele
 }
 
 /// Xử lý dấu mũ, trăng, móc: 'aa' -> 'â', 'aw' -> 'ă', 'ee' -> 'ê', 'oo' -> 'ô', 'ow' -> 'ơ', 'uw' -> 'ư', 'w' -> 'ư'
-fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bool, simple_telex: bool) -> Option<String> {
+fn handle_vowel_modifier(
+    word: &str,
+    key: char,
+    is_upper: bool,
+    free_marking: bool,
+    simple_telex: bool,
+    raw_keys: Option<&str>,
+) -> Option<String> {
     let chars: Vec<char> = word.chars().collect();
     if chars.is_empty() {
         if key == 'w' {
@@ -178,22 +186,36 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
 
         if undo_match {
             if simple_telex {
-                // Telex giản lược: Không hỗ trợ hoàn tác mũ/móc. Gõ phím thứ 3 nối tiếp chữ đó (aaa -> âa)
-                return None;
+                // Telex giản lược: Không hỗ trợ hoàn tác mũ/móc thông thường (aaa -> âa, ddd -> đd).
+                // NGOẠI TRỪ: phím 'w' trên 'ư' (ví dụ: uww -> uw, ww -> w)
+                let is_w_on_u = base == 'u' && vmod == VowelMod::Horn && key == 'w';
+                if !is_w_on_u {
+                    return None;
+                }
             }
             let mut new_chars = chars.clone();
 
-            // Nếu người dùng gõ 'w' khi ký tự cuối là 'ư'/'Ư' mà trước đó không phải là nguyên âm:
-            // Hoàn tác thành ký tự 'w' độc lập (ví dụ gõ "w" -> "ư", gõ tiếp "w" -> "w", hoặc "kw" -> "kư" -> "kw")
+            // Nếu người dùng gõ 'w' khi ký tự cuối là 'ư'/'Ư':
+            // Chỉ ăn chữ 'u' biến thành 'w' khi người dùng thật sự gõ 'ww' (không có 'u' đứng trước):
             if base == 'u' && vmod == VowelMod::Horn && key == 'w' {
-                let is_standalone_w = if chars.len() == 1 {
-                    true
+                let is_ww_only = if let Some(raw) = raw_keys {
+                    let r_lower: String = raw.chars().map(|c| c.to_ascii_lowercase()).collect();
+                    if r_lower.ends_with("ww") {
+                        let len = r_lower.len();
+                        if len == 2 {
+                            true // Người dùng chỉ gõ đúng "ww" -> ra "w"
+                        } else {
+                            let prev = r_lower.chars().nth(len - 3).unwrap_or(' ');
+                            prev != 'u' // Nếu trước đó không phải 'u' (ví dụ "tww"), là ww ăn u thành tw
+                        }
+                    } else {
+                        false
+                    }
                 } else {
-                    let prev_c = chars[chars.len() - 2];
-                    decompose_vietnamese_char(prev_c).is_none()
+                    false
                 };
 
-                if is_standalone_w {
+                if is_ww_only {
                     new_chars[last_idx] = if is_upper || char_upper { 'W' } else { 'w' };
                     return Some(new_chars.into_iter().collect());
                 }
@@ -208,10 +230,9 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
     }
 
     // 2. Xử lý 'uow' / 'ươ' và 'uaw' / 'ưa' khi gặp 'w'
-    // Telex giản lược: Không tự đổi cả cặp 'uo' -> 'ươ', phải gõ rõ 'uwow' mới ra 'ươ'!
-    if key == 'w' && !simple_telex {
+    if key == 'w' {
         // Xử lý 'ua' + 'w' -> 'ưa' (ví dụ: 'cua' + 'w' -> 'cưa', 'mua' + 'w' -> 'mưa', 'chua' + 'w' -> 'chưa')
-        // Ngoại trừ khi đi sau 'q'/'Q' (như 'qua' + 'w' -> 'quă')
+        // Áp dụng cho cả Telex thường và Telex giản lược
         let mut found_ua = None;
         for i in 0..chars.len().saturating_sub(1) {
             if i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
@@ -230,6 +251,9 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
             let (_, _, t2, u2) = decompose_vietnamese_char(chars[i + 1]).unwrap_or(('a', VowelMod::None, Tone::None, false));
 
             if m1 == VowelMod::Horn {
+                if simple_telex {
+                    return None;
+                }
                 // Đã là 'ưa', gõ tiếp 'w' -> hoàn tác thành 'ua' và chèn 'w' (ví dụ: 'cưa' + 'w' -> 'cuaw')
                 let mut new_chars = chars.clone();
                 let restored_u = get_vietnamese_vowel('u', VowelMod::None, t1).unwrap_or('u');
@@ -249,18 +273,21 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
                 return Some(new_chars.into_iter().collect());
             }
         }
-        let mut found_uo = None;
-        for i in 0..chars.len().saturating_sub(1) {
-            if i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
-                continue;
+
+        // Telex giản lược: Không tự đổi cả cặp 'uo' -> 'ươ', phải gõ rõ 'uwow' mới ra 'ươ'!
+        if !simple_telex {
+            let mut found_uo = None;
+            for i in 0..chars.len().saturating_sub(1) {
+                if i > 0 && chars[i - 1].to_ascii_lowercase() == 'q' {
+                    continue;
+                }
+                let c1 = chars[i].to_ascii_lowercase();
+                let c2 = chars[i + 1].to_ascii_lowercase();
+                if (c1 == 'u' || c1 == 'ư') && (c2 == 'o' || c2 == 'ơ') {
+                    found_uo = Some(i);
+                    break;
+                }
             }
-            let c1 = chars[i].to_ascii_lowercase();
-            let c2 = chars[i + 1].to_ascii_lowercase();
-            if (c1 == 'u' || c1 == 'ư') && (c2 == 'o' || c2 == 'ơ') {
-                found_uo = Some(i);
-                break;
-            }
-        }
 
         if let Some(i) = found_uo {
             let mut new_chars = chars.clone();
@@ -293,6 +320,7 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
             return Some(new_chars.into_iter().collect());
         }
     }
+}
 
     // 3. Áp dụng modifier mũ/móc/trăng vào ký tự LIỀN KỀ TRƯỚC ĐÓ
     if let Some((base, vmod, tone, char_upper)) = decompose_vietnamese_char(last_c) {
@@ -630,7 +658,15 @@ pub fn select_tone_vowel_index(chars: &[char], vowel_indices: &[usize], modern_t
 
     // 3. Có 3 nguyên âm trơn: LUÔN ĐẶT Ở NGUYÊN ÂM Ở GIỮA (thứ hai)
     // Sửa dứt điểm lỗi 'ngòai' thành 'ngoài', 'xòai' thành 'xoài'!
+    // Ngoại lệ: nhóm kết thúc bằng 'ye' (chuyen, thuyen, khuyen, tuyen, huyen...) thì âm chính là 'e' (thứ ba)!
     if count >= 3 {
+        let vowels_str: String = vowel_indices
+            .iter()
+            .filter_map(|&i| decompose_vietnamese_char(chars[i]).map(|(base, _, _, _)| base))
+            .collect();
+        if vowels_str.ends_with("ye") {
+            return vowel_indices[2];
+        }
         return vowel_indices[1];
     }
 

@@ -287,6 +287,7 @@ impl Engine {
                         config.free_marking,
                         config.smart_english,
                         config.simple_telex,
+                        Some(&self.raw_keys),
                     ),
                     InputMethod::Vni => vni::transform_vni(
                         &self.current_word,
@@ -334,6 +335,7 @@ impl Engine {
                 config.free_marking,
                 config.smart_english,
                 config.simple_telex,
+                Some(&self.raw_keys),
             ),
             InputMethod::Vni => vni::transform_vni(
                 &self.current_word,
@@ -1621,11 +1623,11 @@ mod tests {
         assert_eq!(config.dynamic_caret, false);
 
         // Telex: "tày" + 's' -> "táy"
-        let transformed = telex::transform_telex("tày", 's', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex);
+        let transformed = telex::transform_telex("tày", 's', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex, None);
         assert_eq!(transformed, Some("táy".to_string()));
 
         // Telex: "chuyen" + 'e' -> "chuyên"
-        let transformed_e = telex::transform_telex("chuyen", 'e', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex);
+        let transformed_e = telex::transform_telex("chuyen", 'e', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex, None);
         assert_eq!(transformed_e, Some("chuyên".to_string()));
 
         // VNI: "tày" + '1' -> "táy"
@@ -1633,7 +1635,36 @@ mod tests {
         assert_eq!(transformed_vni, Some("táy".to_string()));
 
         // Foreign word with smart_english: "file" + 's' -> None
-        let transformed_en = telex::transform_telex("file", 's', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex);
+        let transformed_en = telex::transform_telex("file", 's', config.modern_tone, config.free_marking, config.smart_english, config.simple_telex, None);
         assert_eq!(transformed_en, None);
+    }
+
+    #[test]
+    fn test_uww_and_simple_telex_tone() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Standard Telex:
+        // uww -> uw
+        assert_eq!(simulate_type(&mut engine, &config, "uww"), "uw");
+        // ww -> w
+        assert_eq!(simulate_type(&mut engine, &config, "ww"), "w");
+        // tuww -> tuw
+        assert_eq!(simulate_type(&mut engine, &config, "tuww"), "tuw");
+        // tww -> tw
+        assert_eq!(simulate_type(&mut engine, &config, "tww"), "tw");
+        // chuyenr -> chuyển
+        assert_eq!(simulate_type(&mut engine, &config, "chuyenr"), "chuyển");
+
+        // Simple Telex:
+        let mut simple_config = Config::default();
+        simple_config.simple_telex = true;
+
+        // uww -> uw in simple telex
+        assert_eq!(simulate_type(&mut engine, &simple_config, "uww"), "uw");
+        // cuawr -> cửa in simple telex
+        assert_eq!(simulate_type(&mut engine, &simple_config, "cuawr"), "cửa");
+        // chuyenr -> chuyển in simple telex
+        assert_eq!(simulate_type(&mut engine, &simple_config, "chuyenr"), "chuyển");
     }
 }
