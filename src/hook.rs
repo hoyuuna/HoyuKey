@@ -528,7 +528,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                         };
 
                         if let Some(new_word) = transformed {
-                            if new_word != *target_word {
+                            if new_word != *target_word && crate::automation::is_modification_behind_caret(&ctx.post_word, &new_word) {
                                 let deletes = ctx.post_word.chars().count();
                                 let backspaces = ctx.pre_word.chars().count();
 

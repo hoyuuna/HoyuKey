@@ -224,14 +224,6 @@ pub fn extract_context_from_pre_post(pre_str: &str, post_str: &str) -> Option<Ca
         return None;
     }
 
-    // Nếu con trỏ đang ở giữa một từ (ký tự ngay sau con trỏ là chữ cái, ví dụ 't|ày') -> KHÔNG can thiệp sửa dấu!
-    // Người dùng muốn chèn chữ vào giữa từ (ví dụ 't|ày' + 's' -> 'tsày'), tuyệt đối không đổi thành 'táy'.
-    if let Some(first_post) = post_str.chars().next() {
-        if first_post.is_alphabetic() {
-            return None;
-        }
-    }
-
     let pre_word: String = pre_str
         .chars()
         .rev()
@@ -245,8 +237,12 @@ pub fn extract_context_from_pre_post(pre_str: &str, post_str: &str) -> Option<Ca
         return None;
     }
 
-    let post_word = String::new();
-    let full_word = pre_word.clone();
+    let post_word: String = post_str
+        .chars()
+        .take_while(|c| c.is_alphabetic())
+        .collect();
+
+    let full_word = format!("{}{}", pre_word, post_word);
     let len = full_word.chars().count();
     if len == 0 || len > 10 {
         return None;
@@ -257,6 +253,18 @@ pub fn extract_context_from_pre_post(pre_str: &str, post_str: &str) -> Option<Ca
         pre_word,
         post_word,
     })
+}
+
+/// Kiểm tra xem biến đổi có xảy ra hoàn toàn ở phía sau con trỏ (vị trí con trỏ phải đứng sau ký tự được sửa).
+/// Nghĩa là phần đuôi post_word phía sau con trỏ không hề bị thay đổi.
+pub fn is_modification_behind_caret(post_word: &str, new_word: &str) -> bool {
+    let post_len = post_word.chars().count();
+    let new_chars: Vec<char> = new_word.chars().collect();
+    let post_chars: Vec<char> = post_word.chars().collect();
+    if new_chars.len() < post_len {
+        return false;
+    }
+    new_chars[new_chars.len() - post_len..] == post_chars[..]
 }
 
 /// Trích xuất từ và vị trí con trỏ từ một chuỗi văn bản và chỉ số vị trí con trỏ (character offset)
@@ -343,11 +351,15 @@ fn get_win32_edit_caret_word(fg: HWND) -> Option<CaretWordContext> {
     }
 }
 
-/// Cách 2: Đọc từ qua Windows UI Automation (Word, Chrome, Edge, VS Code, UWP, WPF...)
-fn get_uia_caret_word() -> Option<CaretWordContext> {
+static UIA_INSTANCE: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+fn get_cached_uia() -> Option<*mut c_void> {
+    let mut lock = UIA_INSTANCE.lock().ok()?;
+    if let Some(ptr_val) = *lock {
+        return Some(ptr_val as *mut c_void);
+    }
     unsafe {
         let _ = CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED as u32);
-
         let mut uia_raw: *mut c_void = null_mut();
         let hr = CoCreateInstance(
             &CUIAutomation,
@@ -356,13 +368,23 @@ fn get_uia_caret_word() -> Option<CaretWordContext> {
             &IID_IUI_AUTOMATION,
             &mut uia_raw as *mut _ as *mut *mut c_void,
         );
-        if hr < 0 || uia_raw.is_null() {
-            return None;
+        if hr >= 0 && !uia_raw.is_null() {
+            *lock = Some(uia_raw as usize);
+            Some(uia_raw)
+        } else {
+            None
         }
-        let uia = ComPtr::<IUIAutomationVtbl>::new(uia_raw)?;
+    }
+}
+
+/// Cách 2: Đọc từ qua Windows UI Automation (Word, Chrome, Edge, VS Code, UWP, WPF...)
+fn get_uia_caret_word() -> Option<CaretWordContext> {
+    unsafe {
+        let uia_raw = get_cached_uia()?;
+        let uia = &**(uia_raw as *mut *mut IUIAutomationVtbl);
 
         let mut elem_raw: *mut c_void = null_mut();
-        let hr = (uia.vtbl().GetFocusedElement)(uia.as_ptr(), &mut elem_raw);
+        let hr = (uia.GetFocusedElement)(uia_raw, &mut elem_raw);
         if hr < 0 || elem_raw.is_null() {
             return None;
         }
@@ -492,14 +514,39 @@ mod tests {
         assert_eq!(ctx.pre_word, "đây");
         assert_eq!(ctx.post_word, "");
 
-        // Con trỏ đứng ở giữa: "đ|ây" (char index 1) -> KHÔNG can thiệp, để người dùng gõ chèn chữ tự nhiên
-        assert_eq!(extract_word_from_text_at_caret(text, 1), None);
+        // Con trỏ đứng ở giữa: "đ|ây" (char index 1)
+        let ctx2 = extract_word_from_text_at_caret(text, 1).unwrap();
+        assert_eq!(ctx2.full_word, "đây");
+        assert_eq!(ctx2.pre_word, "đ");
+        assert_eq!(ctx2.post_word, "ây");
 
         // Con trỏ đứng ở từ "đó" (char index 12)
         let ctx3 = extract_word_from_text_at_caret(text, 12).unwrap();
         assert_eq!(ctx3.full_word, "đó");
         assert_eq!(ctx3.pre_word, "đó");
         assert_eq!(ctx3.post_word, "");
+    }
+
+    #[test]
+    fn test_is_modification_behind_caret() {
+        // 1. Con trỏ đứng ở cuối từ: "tày|" + 's' -> "táy" (post_word = "")
+        assert!(is_modification_behind_caret("", "táy"));
+
+        // 2. Con trỏ đứng sau chữ 'à': "tà|y" + 's' -> "táy" (post_word = "y")
+        assert!(is_modification_behind_caret("y", "táy"));
+
+        // 3. Con trỏ đứng trước chữ 'à': "t|ày" + 's' -> "táy" (post_word = "ày")
+        // Biến đổi xảy ra ở phía trước con trỏ (ở chữ à) -> BỊ TỪ CHỐI!
+        assert!(!is_modification_behind_caret("ày", "táy"));
+
+        // 4. "đ|ây" + 's' -> "đấy" (post_word = "ây") -> BỊ TỪ CHỐI!
+        assert!(!is_modification_behind_caret("ây", "đấy"));
+
+        // 5. "đâ|y" + 's' -> "đấy" (post_word = "y") -> CHẤP NHẬN!
+        assert!(is_modification_behind_caret("y", "đấy"));
+
+        // 6. "đây|" + 's' -> "đấy" (post_word = "") -> CHẤP NHẬN!
+        assert!(is_modification_behind_caret("", "đấy"));
     }
 
     #[test]
@@ -526,8 +573,11 @@ mod tests {
         assert_eq!(ctx.pre_word, "tày");
         assert_eq!(ctx.post_word, "");
 
-        // Trường hợp con trỏ ở giữa "t|ày" -> KHÔNG sửa dấu (để gõ chèn chữ như tsày)
-        assert_eq!(extract_context_from_pre_post("t", "ày là gì"), None);
+        // Trường hợp con trỏ ở giữa "t|ày" -> trích xuất pre_word="t", post_word="ày"
+        let ctx2 = extract_context_from_pre_post("t", "ày là gì").unwrap();
+        assert_eq!(ctx2.full_word, "tày");
+        assert_eq!(ctx2.pre_word, "t");
+        assert_eq!(ctx2.post_word, "ày");
 
         // Trường hợp con trỏ sau khoảng trắng
         assert_eq!(extract_context_from_pre_post("Tao ", ""), None);
