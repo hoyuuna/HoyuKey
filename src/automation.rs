@@ -18,13 +18,14 @@ extern "system" {
 
 #[link(name = "user32")]
 extern "system" {
-    fn GetGUIThreadInfo(idThread: u32, lpgui: *mut GUITHREADINFO) -> i32;
+    pub(crate) fn GetGUIThreadInfo(idThread: u32, lpgui: *mut GUITHREADINFO) -> i32;
 }
 
 const EM_GETSEL: u32 = 0x00B0;
 
 #[repr(C)]
-struct GUITHREADINFO {
+#[allow(non_snake_case)]
+pub(crate) struct GUITHREADINFO {
     pub cbSize: u32,
     pub flags: u32,
     pub hwndActive: HWND,
