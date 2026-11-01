@@ -537,6 +537,57 @@ pub fn get_caret_word_context() -> Option<CaretWordContext> {
     }
 }
 
+static CARET_CACHE: std::sync::Mutex<Option<CaretWordContext>> = std::sync::Mutex::new(None);
+static WORKER_TRIGGER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Yêu cầu background thread quét lại vị trí con trỏ (gọi bất đồng bộ, 0ms latency)
+pub fn request_caret_refresh() {
+    WORKER_TRIGGER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Lấy từ ngữ cảnh con trỏ đã được background thread nạp sẵn từ trước (0ms latency)
+pub fn get_cached_caret_word() -> Option<CaretWordContext> {
+    CARET_CACHE.lock().ok()?.clone()
+}
+
+/// Xóa cache khi người dùng bắt đầu gõ hoặc click chuột
+pub fn clear_cached_caret_word() {
+    if let Ok(mut lock) = CARET_CACHE.lock() {
+        *lock = None;
+    }
+}
+
+/// Khởi chạy background worker thread nạp sẵn từ tại con trỏ mà không làm lag hook phím
+pub fn init_background_caret_loader() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+
+    std::thread::Builder::new()
+        .name("hoyukey-caret-loader".to_string())
+        .spawn(|| {
+            unsafe {
+                let _ = CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED as u32);
+            }
+            let mut last_processed = 0;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(35));
+                let current_trigger = WORKER_TRIGGER.load(std::sync::atomic::Ordering::Relaxed);
+                if current_trigger != 0 && current_trigger != last_processed {
+                    last_processed = current_trigger;
+                    let ctx = get_caret_word_context();
+                    if WORKER_TRIGGER.load(std::sync::atomic::Ordering::Relaxed) == current_trigger {
+                        if let Ok(mut lock) = CARET_CACHE.lock() {
+                            *lock = ctx;
+                        }
+                    }
+                }
+            }
+        })
+        .ok();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

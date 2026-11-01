@@ -16,7 +16,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId,
     PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND,
     HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 #[link(name = "user32")]
@@ -75,6 +75,7 @@ static LAST_PHYSICAL_VK: AtomicU32 = AtomicU32::new(0);
 static KEY_REPEAT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn install_hook() -> bool {
+    crate::automation::init_background_caret_loader();
     unsafe {
         let kbd_hook = SetWindowsHookExW(
             WH_KEYBOARD_LL,
@@ -275,8 +276,14 @@ unsafe extern "system" fn low_level_mouse_proc(
 ) -> LRESULT {
     if code >= 0 {
         let msg = wparam as u32;
-        if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
-            // Khi click chuột: khôi phục từ vừa gõ để cho phép click chuột vào sửa dấu ngay lập tức
+        if msg == WM_LBUTTONUP || msg == WM_RBUTTONUP {
+            // Khi nhả chuột: con trỏ đã đáp xuống vị trí mới -> yêu cầu nạp nền từ tại con trỏ
+            if let Ok(mut state) = GLOBAL_STATE.lock() {
+                state.engine.on_mouse_click();
+            }
+            crate::automation::request_caret_refresh();
+        } else if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
+            crate::automation::clear_cached_caret_word();
             if let Ok(mut state) = GLOBAL_STATE.lock() {
                 state.engine.on_mouse_click();
             }
@@ -459,6 +466,9 @@ unsafe extern "system" fn low_level_keyboard_proc(
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             if let Ok(mut state) = GLOBAL_STATE.lock() {
                 state.engine.on_arrow_left();
+                if state.engine.current_word.is_empty() {
+                    crate::automation::request_caret_refresh();
+                }
             }
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
@@ -466,12 +476,22 @@ unsafe extern "system" fn low_level_keyboard_proc(
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             if let Ok(mut state) = GLOBAL_STATE.lock() {
                 state.engine.on_arrow_right();
+                if state.engine.current_word.is_empty() {
+                    crate::automation::request_caret_refresh();
+                }
             }
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
-        VK_ESCAPE | VK_TAB | VK_UP | VK_DOWN | VK_HOME
+        VK_UP | VK_DOWN => {
+            reset_engine();
+            crate::automation::request_caret_refresh();
+            BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
+            return CallNextHookEx(null_mut(), code, wparam, lparam);
+        }
+        VK_ESCAPE | VK_TAB | VK_HOME
         | VK_END | VK_PRIOR | VK_NEXT => {
             reset_engine();
+            crate::automation::clear_cached_caret_word();
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
@@ -480,6 +500,78 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
     // 7. Chuyển đổi mã phím thành ký tự Unicode
     if let Some(ch) = vk_to_char(kbd.vkCode, kbd.scanCode) {
+        // Kiểm tra nạp nền con trỏ (Background Caret Context - 0ms latency, không block hook)
+        if repeat_count == 0 {
+            let (enabled, dynamic_caret, is_telex, modern_tone, free_marking, smart_english, simple_telex, is_empty) = {
+                let state = GLOBAL_STATE.lock().unwrap();
+                (
+                    state.config.enabled,
+                    state.config.dynamic_caret,
+                    state.config.input_method == crate::config::InputMethod::Telex,
+                    state.config.modern_tone,
+                    state.config.free_marking,
+                    state.config.smart_english,
+                    state.config.simple_telex,
+                    state.engine.current_word.is_empty(),
+                )
+            };
+
+            if enabled && dynamic_caret && is_empty {
+                let is_candidate_key = if is_telex {
+                    matches!(ch, 's' | 'f' | 'r' | 'x' | 'j' | 'z' | 'a' | 'e' | 'o' | 'w' | 'd' |
+                                 'S' | 'F' | 'R' | 'X' | 'J' | 'Z' | 'A' | 'E' | 'O' | 'W' | 'D')
+                } else {
+                    matches!(ch, '1'..='9' | '0')
+                };
+
+                if is_candidate_key {
+                    if let Some(ctx) = crate::automation::get_cached_caret_word() {
+                        let target_word = &ctx.full_word;
+
+                        let transformed = if is_telex {
+                            crate::engine::telex::transform_telex(
+                                target_word,
+                                ch,
+                                modern_tone,
+                                free_marking,
+                                smart_english,
+                                simple_telex,
+                            )
+                        } else {
+                            crate::engine::vni::transform_vni(
+                                target_word,
+                                ch,
+                                modern_tone,
+                                free_marking,
+                                smart_english,
+                            )
+                        };
+
+                        if let Some(new_word) = transformed {
+                            if new_word != *target_word && crate::automation::is_modification_behind_caret(&ctx.post_word, &new_word) {
+                                let deletes = ctx.post_word.chars().count();
+                                let backspaces = ctx.pre_word.chars().count();
+
+                                {
+                                    let mut state = GLOBAL_STATE.lock().unwrap();
+                                    state.engine.current_word = new_word.clone();
+                                    state.engine.raw_keys = new_word.clone();
+                                    state.engine.has_transformed = true;
+                                    state.engine.caret_offset = Some(new_word.chars().count() - deletes);
+                                }
+
+                                crate::automation::clear_cached_caret_word();
+                                BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
+                                send_replace_batch(deletes, backspaces, &new_word);
+                                return 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        crate::automation::clear_cached_caret_word();
+
         // Khi người dùng giữ phím (auto-repeat >= 3):
         // Tuyệt đối không can thiệp biến đổi để tránh nghẽn luồng phím Windows & lag máy
         let action = if repeat_count >= 3 {
