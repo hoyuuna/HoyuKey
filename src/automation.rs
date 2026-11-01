@@ -134,9 +134,11 @@ pub struct IUIAutomationTextRangeVtbl {
         unit: i32,
     ) -> windows_sys::core::HRESULT,
     pub FindAttribute: usize,
+    pub FindText: usize,
     pub GetAttributeValue: usize,
     pub GetBoundingRectangles: usize,
     pub GetEnclosingElement: usize,
+    pub GetChildren: usize,
     pub GetText: unsafe extern "system" fn(
         this: *mut c_void,
         maxLength: i32,
@@ -154,7 +156,6 @@ pub struct IUIAutomationTextRangeVtbl {
     pub AddToSelection: usize,
     pub RemoveFromSelection: usize,
     pub ScrollIntoView: usize,
-    pub GetChildren: usize,
 }
 
 struct ComPtr<T> {

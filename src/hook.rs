@@ -276,9 +276,10 @@ unsafe extern "system" fn low_level_mouse_proc(
     if code >= 0 {
         let msg = wparam as u32;
         if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
-            // Khi click chuột: người dùng chuyển con trỏ sang vị trí mới,
-            // reset sạch bộ đệm để dynamic caret nhận diện chính xác từ tại vị trí chuột mới
-            reset_engine();
+            // Khi click chuột: khôi phục từ vừa gõ để cho phép click chuột vào sửa dấu ngay lập tức
+            if let Ok(mut state) = GLOBAL_STATE.lock() {
+                state.engine.on_mouse_click();
+            }
         }
     }
     CallNextHookEx(null_mut(), code, wparam, lparam)
@@ -454,17 +455,17 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
-        VK_LEFT | VK_RIGHT => {
+        VK_LEFT => {
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
-            let dynamic_caret = {
-                let state = GLOBAL_STATE.lock().unwrap();
-                state.config.dynamic_caret
-            };
-            if dynamic_caret {
-                reset_engine();
-            } else {
-                let mut state = GLOBAL_STATE.lock().unwrap();
+            if let Ok(mut state) = GLOBAL_STATE.lock() {
                 state.engine.on_arrow_left();
+            }
+            return CallNextHookEx(null_mut(), code, wparam, lparam);
+        }
+        VK_RIGHT => {
+            BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
+            if let Ok(mut state) = GLOBAL_STATE.lock() {
+                state.engine.on_arrow_right();
             }
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
@@ -567,6 +568,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
                 // Gửi Backspace và chuỗi Unicode mới
                 send_transform_batch(backspaces, &text);
+                return 1;
+            }
+            KeyAction::TransformCaret { deletes, backspaces, text } => {
+                BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
+                send_replace_batch(deletes, backspaces, &text);
                 return 1;
             }
             KeyAction::PassThrough | KeyAction::Reset | KeyAction::Backspace => {

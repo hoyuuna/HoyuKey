@@ -167,6 +167,7 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
     if let Some((base, vmod, tone, char_upper)) = decompose_vietnamese_char(last_c) {
         let undo_match = match (base, vmod, key) {
             ('a', VowelMod::Hat, 'a') => true,
+            ('a', VowelMod::Breve, 'a') => true,
             ('e', VowelMod::Hat, 'e') => true,
             ('o', VowelMod::Hat, 'o') => true,
             ('a', VowelMod::Breve, 'w') => true,
@@ -299,7 +300,14 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
         let is_already_doubled = last_idx > 0 && chars[last_idx - 1].to_ascii_lowercase() == key;
         if !is_already_doubled {
             let new_vmod = match (base, vmod, key) {
-                ('a', VowelMod::None, 'a') => Some(VowelMod::Hat),
+                ('a', VowelMod::None, 'a') => {
+                    // Trong tiếng Việt không bao giờ có 'oâ' mà chỉ có 'oă' (hoẵng, ngoẵng, loằng ngoằng, thoăn thoắt...)
+                    if last_idx > 0 && chars[last_idx - 1].to_ascii_lowercase() == 'o' {
+                        Some(VowelMod::Breve)
+                    } else {
+                        Some(VowelMod::Hat)
+                    }
+                }
                 ('a', VowelMod::None, 'w') => Some(VowelMod::Breve),
                 ('e', VowelMod::None, 'e') => Some(VowelMod::Hat),
                 ('o', VowelMod::None, 'o') => Some(VowelMod::Hat),
@@ -359,7 +367,13 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
 
                     if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
                         let m = match (base, vmod, key) {
-                            ('a', VowelMod::None, 'a') => Some(VowelMod::Hat),
+                            ('a', VowelMod::None, 'a') => {
+                                if idx > 0 && chars[idx - 1].to_ascii_lowercase() == 'o' {
+                                    Some(VowelMod::Breve)
+                                } else {
+                                    Some(VowelMod::Hat)
+                                }
+                            }
                             ('a', VowelMod::None, 'w') => Some(VowelMod::Breve),
                             ('e', VowelMod::None, 'e') => Some(VowelMod::Hat),
                             ('o', VowelMod::None, 'o') => Some(VowelMod::Hat),
@@ -405,6 +419,7 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
                     if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
                         let is_undo = match (base, vmod, key) {
                             ('a', VowelMod::Hat, 'a') => true,
+                            ('a', VowelMod::Breve, 'a') => true,
                             ('a', VowelMod::Breve, 'w') => true,
                             ('e', VowelMod::Hat, 'e') => true,
                             ('o', VowelMod::Hat, 'o') => true,

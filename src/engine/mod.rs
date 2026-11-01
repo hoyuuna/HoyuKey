@@ -14,6 +14,12 @@ pub enum KeyAction {
         backspaces: usize,
         text: String,
     },
+    /// Chặn phím gốc, gửi Delete xóa đuôi, Backspace xóa đầu và gõ chuỗi thay thế
+    TransformCaret {
+        deletes: usize,
+        backspaces: usize,
+        text: String,
+    },
     /// Đặt lại buffer từ
     Reset,
     /// Xử lý phím Backspace
@@ -25,6 +31,7 @@ pub struct Engine {
     pub raw_keys: String,
     pub has_transformed: bool,
     last_word_before_space: Option<(String, String, bool)>,
+    pub caret_offset: Option<usize>,
     pub at_start_of_line: bool,
     pub after_sentence_end: bool,
     pub saw_sentence_end_punct: bool,
@@ -40,6 +47,7 @@ impl Engine {
             raw_keys: String::new(),
             has_transformed: false,
             last_word_before_space: None,
+            caret_offset: None,
             at_start_of_line: true,
             after_sentence_end: false,
             saw_sentence_end_punct: false,
@@ -54,6 +62,7 @@ impl Engine {
         self.raw_keys.clear();
         self.has_transformed = false;
         self.last_word_before_space = None;
+        self.caret_offset = None;
         self.has_space_before = false;
     }
 
@@ -99,6 +108,9 @@ impl Engine {
                 if self.current_word.is_empty() {
                     self.raw_keys.clear();
                     self.has_transformed = false;
+                    self.caret_offset = None;
+                } else {
+                    self.caret_offset = Some(self.current_word.chars().count());
                 }
             }
             return None;
@@ -106,11 +118,26 @@ impl Engine {
 
         if self.current_word.is_empty() {
             if let Some((word, raw, transformed)) = self.last_word_before_space.take() {
+                let len = word.chars().count();
                 self.current_word = word;
                 self.raw_keys = raw;
                 self.has_transformed = transformed;
+                self.caret_offset = Some(len);
             }
             return None;
+        }
+
+        if let Some(offset) = self.caret_offset {
+            let len = self.current_word.chars().count();
+            if offset < len {
+                if offset > 0 {
+                    let mut chars: Vec<char> = self.current_word.chars().collect();
+                    chars.remove(offset - 1);
+                    self.current_word = chars.into_iter().collect();
+                    self.caret_offset = Some(offset - 1);
+                }
+                return None;
+            }
         }
 
         self.current_word.pop();
@@ -118,6 +145,9 @@ impl Engine {
         if self.current_word.is_empty() {
             self.raw_keys.clear();
             self.has_transformed = false;
+            self.caret_offset = None;
+        } else {
+            self.caret_offset = Some(self.current_word.chars().count());
         }
         None
     }
@@ -126,9 +156,30 @@ impl Engine {
     pub fn on_arrow_left(&mut self) {
         if self.current_word.is_empty() {
             if let Some((word, raw, transformed)) = self.last_word_before_space.clone() {
+                let len = word.chars().count();
                 self.current_word = word;
                 self.raw_keys = raw;
                 self.has_transformed = transformed;
+                self.caret_offset = Some(len);
+            }
+        } else if let Some(offset) = self.caret_offset {
+            if offset > 0 {
+                self.caret_offset = Some(offset - 1);
+            }
+        } else {
+            let len = self.current_word.chars().count();
+            if len > 0 {
+                self.caret_offset = Some(len - 1);
+            }
+        }
+    }
+
+    /// Di chuyển con trỏ sang phải trong từ vừa gõ
+    pub fn on_arrow_right(&mut self) {
+        if let Some(offset) = self.caret_offset {
+            let len = self.current_word.chars().count();
+            if offset < len {
+                self.caret_offset = Some(offset + 1);
             }
         }
     }
@@ -137,9 +188,11 @@ impl Engine {
     pub fn on_mouse_click(&mut self) {
         if self.current_word.is_empty() {
             if let Some((word, raw, transformed)) = self.last_word_before_space.clone() {
+                let len = word.chars().count();
                 self.current_word = word;
                 self.raw_keys = raw;
                 self.has_transformed = transformed;
+                self.caret_offset = Some(len);
             }
         }
     }
@@ -219,7 +272,62 @@ impl Engine {
         self.last_char_typed = Some(c);
         self.raw_keys.push(c);
 
-        // 4. Thử biến đổi theo quy tắc Telex / VNI
+        // 4. Nếu con trỏ đang ở giữa từ (di chuyển bằng phím mũi tên)
+        if let Some(offset) = self.caret_offset {
+            let word_len = self.current_word.chars().count();
+            if offset < word_len {
+                let chars: Vec<char> = self.current_word.chars().collect();
+                let pre_word: String = chars[..offset].iter().collect();
+                let post_word: String = chars[offset..].iter().collect();
+
+                let transformed = match config.input_method {
+                    InputMethod::Telex => telex::transform_telex(
+                        &self.current_word,
+                        c,
+                        config.modern_tone,
+                        config.free_marking,
+                        config.smart_english,
+                        config.simple_telex,
+                    ),
+                    InputMethod::Vni => vni::transform_vni(
+                        &self.current_word,
+                        c,
+                        config.modern_tone,
+                        config.free_marking,
+                        config.smart_english,
+                    ),
+                };
+
+                if let Some(new_word) = transformed {
+                    // Nguyên tắc: Chỉ sửa nếu ký tự biến đổi nằm ở ĐẰNG SAU con trỏ (phần post_word không đổi)
+                    if new_word != self.current_word && crate::automation::is_modification_behind_caret(&post_word, &new_word) {
+                        let deletes = post_word.chars().count();
+                        let backspaces = pre_word.chars().count();
+                        self.current_word = new_word.clone();
+            self.caret_offset = Some(self.current_word.chars().count());
+                        self.raw_keys = new_word.clone();
+                        self.has_transformed = true;
+                        self.caret_offset = Some(self.current_word.chars().count());
+                        return KeyAction::TransformCaret {
+                            deletes,
+                            backspaces,
+                            text: new_word,
+                        };
+                    }
+                }
+
+                // Nếu không phải phím sửa dấu hoặc dấu nằm trước con trỏ: chèn ký tự c vào giữa từ
+                let mut new_chars = chars;
+                new_chars.insert(offset, c);
+                let new_word: String = new_chars.into_iter().collect();
+                self.current_word = new_word;
+                self.raw_keys.push(c);
+                self.caret_offset = Some(offset + 1);
+                return KeyAction::PassThrough;
+            }
+        }
+
+        // 5. Thử biến đổi theo quy tắc Telex / VNI
         let transformed = match config.input_method {
             InputMethod::Telex => telex::transform_telex(
                 &self.current_word,
@@ -245,6 +353,7 @@ impl Engine {
             let is_undo = new_accents < old_accents;
 
             self.current_word = new_word.clone();
+            self.caret_offset = Some(self.current_word.chars().count());
 
             if is_undo {
                 // Người dùng chủ động gõ phím để hoàn tác (ví dụ ww -> w, ddd -> dd, aaa -> aa)
@@ -357,6 +466,7 @@ impl Engine {
         // Nếu người dùng gõ chữ thường nhưng được viết hoa tự động:
         if should_capitalize && was_lowercase {
             self.current_word.push(c);
+            self.caret_offset = Some(self.current_word.chars().count());
             return KeyAction::Transform {
                 backspaces: 0,
                 text: c.to_string(),
@@ -365,6 +475,7 @@ impl Engine {
 
         // Không có biến đổi và từ vẫn hợp lệ: thêm ký tự vào buffer và cho phím đi qua tự nhiên
         self.current_word.push(c);
+        self.caret_offset = Some(self.current_word.chars().count());
         KeyAction::PassThrough
     }
 }
@@ -505,7 +616,7 @@ fn is_word_boundary(c: char) -> bool {
         c,
         '.' | ',' | ';' | ':' | '!' | '?' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<'
             | '>' | '/' | '\\' | '|' | '@' | '#' | '$' | '%' | '^' | '&' | '*' | '+' | '=' | '~'
-            | '`'
+            | '`' | '_'
     )
 }
 
@@ -659,6 +770,52 @@ mod tests {
     }
 
     #[test]
+    fn test_caret_editing_rules() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // 1. Gõ "tayf" -> "tày"
+        for ch in "tayf".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "tày");
+
+        // Bấm mũi tên trái 1 lần -> con trỏ ở giữa "tà|y"
+        engine.on_arrow_left();
+        assert_eq!(engine.caret_offset, Some(2));
+
+        // Gõ 's' -> vì trỏ ở sau 'à', được phép sửa dấu 'à' thành 'á' -> "táy"
+        let act = engine.process_char('s', &config);
+        assert_eq!(
+            act,
+            KeyAction::TransformCaret {
+                deletes: 1,
+                backspaces: 2,
+                text: "táy".to_string(),
+            }
+        );
+        assert_eq!(engine.current_word, "táy");
+
+        // 2. Thử trường hợp con trỏ ở trước nguyên âm:
+        engine.reset();
+        for ch in "tayf".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "tày");
+
+        // Bấm mũi tên trái 2 lần -> con trỏ ở "t|ày"
+        engine.on_arrow_left();
+        engine.on_arrow_left();
+        assert_eq!(engine.caret_offset, Some(1));
+
+        // Gõ 's' -> trỏ đứng TRƯỚC ký tự cần sửa -> KHÔNG ĐƯỢC PHÉP SỬA DẤU!
+        // Phải chèn 's' vào vị trí con trỏ thành "tsày"
+        let act2 = engine.process_char('s', &config);
+        assert_eq!(act2, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "tsày");
+    }
+
+    #[test]
     fn test_telex_z_tone_canceling() {
         let mut engine = Engine::new();
         let config = Config::default();
@@ -678,6 +835,51 @@ mod tests {
 
         engine.process_char('z', &config);
         assert_eq!(engine.current_word, "ma");
+    }
+
+    #[test]
+    fn test_user_stress_test_suite() {
+        let mut engine = Engine::new();
+        let mut config = Config::default();
+        config.auto_caps_line = false;
+
+        let mut type_word = |keys: &str| -> String {
+            engine.reset();
+            for ch in keys.chars() {
+                engine.process_char(ch, &config);
+            }
+            engine.current_word.clone()
+        };
+
+        // 1. hoẵng:
+        assert_eq!(type_word("hoaangx"), "hoẵng");
+
+        // 2. ngoẵng:
+        assert_eq!(type_word("ngoaangx"), "ngoẵng");
+
+        // 3. khuỵu:
+        assert_eq!(type_word("khuyuj"), "khuỵu");
+        assert_eq!(type_word("khuyuju"), "khuỵu");
+
+        // 4. ngoẻo:
+        assert_eq!(type_word("ngoero"), "ngoẻo");
+
+        // 5. thuở:
+        assert_eq!(type_word("thuowr"), "thuở");
+        assert_eq!(type_word("thuorw"), "thuở");
+
+        // 6. xoong (gõ xooong thoát ô thành oo):
+        assert_eq!(type_word("xooong"), "xoong");
+
+        // 7. Từ tiếng Anh không bị dính dấu:
+        assert_eq!(type_word("process"), "process");
+        assert_eq!(type_word("commit"), "commit");
+        assert_eq!(type_word("install"), "install");
+
+        // 8. Chữ hoa:
+        assert_eq!(type_word("Quangr"), "Quảng");
+        assert_eq!(type_word("Bachj"), "Bạch");
+        assert_eq!(type_word("Dduowngf"), "Đường");
     }
 
     #[test]
@@ -1229,6 +1431,12 @@ mod tests {
                     output.push(ch);
                 }
                 KeyAction::Transform { backspaces, text } => {
+                    for _ in 0..backspaces {
+                        output.pop();
+                    }
+                    output.push_str(&text);
+                }
+                KeyAction::TransformCaret { deletes: _, backspaces, text } => {
                     for _ in 0..backspaces {
                         output.pop();
                     }
