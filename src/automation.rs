@@ -61,7 +61,11 @@ pub struct IUIAutomationVtbl {
     pub CompareElements: usize,
     pub CompareRuntimeIds: usize,
     pub GetRootElement: usize,
-    pub ElementFromHandle: usize,
+    pub ElementFromHandle: unsafe extern "system" fn(
+        this: *mut c_void,
+        hwnd: HWND,
+        element: *mut *mut c_void,
+    ) -> windows_sys::core::HRESULT,
     pub ElementFromPoint: usize,
     pub GetFocusedElement: unsafe extern "system" fn(
         this: *mut c_void,
@@ -84,7 +88,6 @@ pub struct IUIAutomationElementVtbl {
     pub GetCachedPropertyValue: usize,
     pub GetCachedPropertyValueEx: usize,
     pub GetCurrentPatternAs: usize,
-    pub GetCachedPatternAs: usize,
     pub GetCurrentPattern: unsafe extern "system" fn(
         this: *mut c_void,
         patternId: i32,
@@ -138,7 +141,6 @@ pub struct IUIAutomationTextRangeVtbl {
     pub GetAttributeValue: usize,
     pub GetBoundingRectangles: usize,
     pub GetEnclosingElement: usize,
-    pub GetChildren: usize,
     pub GetText: unsafe extern "system" fn(
         this: *mut c_void,
         maxLength: i32,
@@ -156,6 +158,7 @@ pub struct IUIAutomationTextRangeVtbl {
     pub AddToSelection: usize,
     pub RemoveFromSelection: usize,
     pub ScrollIntoView: usize,
+    pub GetChildren: usize,
 }
 
 struct ComPtr<T> {
@@ -381,11 +384,32 @@ fn get_cached_uia() -> Option<*mut c_void> {
 /// Cách 2: Đọc từ qua Windows UI Automation (Word, Chrome, Edge, VS Code, UWP, WPF...)
 fn get_uia_caret_word() -> Option<CaretWordContext> {
     unsafe {
+        let hwnd_fg = GetForegroundWindow();
+        if !hwnd_fg.is_null() {
+            // Đánh thức cây Accessibility của Chromium (Chrome, Edge...) nếu đang ở chế độ lười (lazy-init)
+            const WM_GETOBJECT: u32 = 0x003D;
+            const OBJID_CLIENT: isize = -4;
+            const SMTO_ABORTIFHUNG: u32 = 0x0002;
+            let mut result: usize = 0;
+            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
+                hwnd_fg,
+                WM_GETOBJECT,
+                0,
+                OBJID_CLIENT,
+                SMTO_ABORTIFHUNG,
+                20,
+                &mut result,
+            );
+        }
+
         let uia_raw = get_cached_uia()?;
         let uia = &**(uia_raw as *mut *mut IUIAutomationVtbl);
 
         let mut elem_raw: *mut c_void = null_mut();
-        let hr = (uia.GetFocusedElement)(uia_raw, &mut elem_raw);
+        let mut hr = (uia.GetFocusedElement)(uia_raw, &mut elem_raw);
+        if (hr < 0 || elem_raw.is_null()) && !hwnd_fg.is_null() {
+            hr = (uia.ElementFromHandle)(uia_raw, hwnd_fg, &mut elem_raw);
+        }
         if hr < 0 || elem_raw.is_null() {
             return None;
         }
@@ -396,6 +420,17 @@ fn get_uia_caret_word() -> Option<CaretWordContext> {
         if hr < 0 || pat_raw.is_null() {
             // Dự phòng TextPattern2 (ID 10024) cho các ứng dụng hiện đại (Chromium, Edge...)
             hr = (elem.vtbl().GetCurrentPattern)(elem.as_ptr(), 10024, &mut pat_raw);
+        }
+        if pat_raw.is_null() && !hwnd_fg.is_null() {
+            let mut wnd_elem_raw: *mut c_void = null_mut();
+            if (uia.ElementFromHandle)(uia_raw, hwnd_fg, &mut wnd_elem_raw) >= 0 && !wnd_elem_raw.is_null() {
+                if let Some(we) = ComPtr::<IUIAutomationElementVtbl>::new(wnd_elem_raw) {
+                    let _ = (we.vtbl().GetCurrentPattern)(we.as_ptr(), UIA_TEXT_PATTERN_ID, &mut pat_raw);
+                    if pat_raw.is_null() {
+                        let _ = (we.vtbl().GetCurrentPattern)(we.as_ptr(), 10024, &mut pat_raw);
+                    }
+                }
+            }
         }
         if hr < 0 || pat_raw.is_null() {
             return None;

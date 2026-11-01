@@ -165,6 +165,9 @@ impl Engine {
         } else if let Some(offset) = self.caret_offset {
             if offset > 0 {
                 self.caret_offset = Some(offset - 1);
+            } else {
+                // Đã lùi vượt quá đầu từ -> xóa sạch buffer để dynamic caret nhận diện từ trước đó
+                self.reset();
             }
         } else {
             let len = self.current_word.chars().count();
@@ -180,26 +183,16 @@ impl Engine {
             let len = self.current_word.chars().count();
             if offset < len {
                 self.caret_offset = Some(offset + 1);
+            } else {
+                // Đã tiến vượt quá cuối từ -> xóa sạch buffer để dynamic caret nhận diện từ tiếp theo
+                self.reset();
             }
         }
     }
 
-    /// Khôi phục hoặc dọn dẹp khi bấm chuột vào chữ
+    /// Reset sạch buffer khi người dùng click chuột bất kỳ đâu (nhường quyền cho dynamic caret đọc từ thực tế tại vị trí click)
     pub fn on_mouse_click(&mut self) {
-        if self.current_word.is_empty() {
-            if let Some((word, raw, transformed)) = self.last_word_before_space.take() {
-                let len = word.chars().count();
-                self.current_word = word;
-                self.raw_keys = raw;
-                self.has_transformed = transformed;
-                self.caret_offset = Some(len);
-                return;
-            }
-        }
-        self.current_word.clear();
-        self.raw_keys.clear();
-        self.has_transformed = false;
-        self.caret_offset = None;
+        self.reset();
         self.last_word_before_space = None;
     }
 
@@ -765,17 +758,9 @@ mod tests {
         engine.process_char(' ', &config);
         assert_eq!(engine.current_word, "");
 
-        // Bấm chuột vào từ -> khôi phục "hóc"
+        // Bấm chuột bất kỳ đâu -> reset sạch buffer để dynamic caret đọc từ thực tế
         engine.on_mouse_click();
-        assert_eq!(engine.current_word, "hóc");
-
-        // Gõ 'j' đổi dấu sắc sang dấu nặng -> "học"
-        engine.process_char('j', &config);
-        assert_eq!(engine.current_word, "học");
-
-        // Gõ tiếp 'j' (lặp phím dấu theo chuẩn Telex) để hoàn tác về phím thô -> "hocj"
-        engine.process_char('j', &config);
-        assert_eq!(engine.current_word, "hocj");
+        assert_eq!(engine.current_word, "");
     }
 
     #[test]
