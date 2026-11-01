@@ -155,7 +155,7 @@ impl Engine {
     /// Khôi phục từ vừa gõ khi bấm mũi tên trái (cho phép sửa dấu / từ mà không cần Backspace)
     pub fn on_arrow_left(&mut self) {
         if self.current_word.is_empty() {
-            if let Some((word, raw, transformed)) = self.last_word_before_space.clone() {
+            if let Some((word, raw, transformed)) = self.last_word_before_space.take() {
                 let len = word.chars().count();
                 self.current_word = word;
                 self.raw_keys = raw;
@@ -187,7 +187,7 @@ impl Engine {
     /// Khôi phục hoặc dọn dẹp khi bấm chuột vào chữ
     pub fn on_mouse_click(&mut self) {
         if self.current_word.is_empty() {
-            if let Some((word, raw, transformed)) = self.last_word_before_space.clone() {
+            if let Some((word, raw, transformed)) = self.last_word_before_space.take() {
                 let len = word.chars().count();
                 self.current_word = word;
                 self.raw_keys = raw;
@@ -200,6 +200,7 @@ impl Engine {
         self.raw_keys.clear();
         self.has_transformed = false;
         self.caret_offset = None;
+        self.last_word_before_space = None;
     }
 
     /// Xử lý một ký tự gõ vào

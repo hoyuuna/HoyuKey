@@ -506,18 +506,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 };
 
                 if is_candidate_key {
-                    let ctx = crate::automation::get_caret_word_context().or_else(|| {
-                        // Dự phòng nếu app không hỗ trợ UIA: dùng từ vừa gõ trước khoảng trắng nếu có
-                        let state = GLOBAL_STATE.lock().unwrap();
-                        let (word, _, _) = state.engine.last_word_before_space.as_ref()?;
-                        Some(crate::automation::CaretWordContext {
-                            full_word: word.clone(),
-                            pre_word: word.clone(),
-                            post_word: String::new(),
-                        })
-                    });
-
-                    if let Some(ctx) = ctx {
+                    if let Some(ctx) = crate::automation::get_caret_word_context() {
                         let target_word = &ctx.full_word;
 
                         let transformed = if is_telex {
