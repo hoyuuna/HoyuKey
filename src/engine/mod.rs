@@ -653,9 +653,9 @@ mod tests {
         engine.process_char('j', &config);
         assert_eq!(engine.current_word, "học");
 
-        // Gõ tiếp 'j' (lặp phím dấu) để xóa dấu -> "hoc"
+        // Gõ tiếp 'j' (lặp phím dấu theo chuẩn Telex) để hoàn tác về phím thô -> "hocj"
         engine.process_char('j', &config);
-        assert_eq!(engine.current_word, "hoc");
+        assert_eq!(engine.current_word, "hocj");
     }
 
     #[test]
