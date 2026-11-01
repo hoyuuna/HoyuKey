@@ -386,13 +386,35 @@ fn get_cached_uia() -> Option<*mut c_void> {
 fn get_uia_caret_word() -> Option<CaretWordContext> {
     unsafe {
         let hwnd_fg = GetForegroundWindow();
-        if !hwnd_fg.is_null() {
-            // Đánh thức cây Accessibility của Chromium (Chrome, Edge...) nếu đang ở chế độ lười (lazy-init)
-            const WM_GETOBJECT: u32 = 0x003D;
-            const OBJID_CLIENT: isize = -4;
-            const SMTO_ABORTIFHUNG: u32 = 0x0002;
-            let mut result: usize = 0;
-            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
+        if hwnd_fg.is_null() {
+            return None;
+        }
+
+        let thread_id = GetWindowThreadProcessId(hwnd_fg, null_mut());
+        let mut gui: GUITHREADINFO = std::mem::zeroed();
+        gui.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        let hwnd_target = if GetGUIThreadInfo(thread_id, &mut gui) != 0 && !gui.hwndFocus.is_null() {
+            gui.hwndFocus
+        } else {
+            hwnd_fg
+        };
+
+        // Đánh thức cây Accessibility của Chromium (Chrome, Edge...) nếu đang ở chế độ lười (lazy-init)
+        const WM_GETOBJECT: u32 = 0x003D;
+        const OBJID_CLIENT: isize = -4;
+        const SMTO_ABORTIFHUNG: u32 = 0x0002;
+        let mut result: usize = 0;
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
+            hwnd_target,
+            WM_GETOBJECT,
+            0,
+            OBJID_CLIENT,
+            SMTO_ABORTIFHUNG,
+            20,
+            &mut result,
+        );
+        if hwnd_target != hwnd_fg {
+            let _ = windows_sys::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
                 hwnd_fg,
                 WM_GETOBJECT,
                 0,
@@ -408,6 +430,9 @@ fn get_uia_caret_word() -> Option<CaretWordContext> {
 
         let mut elem_raw: *mut c_void = null_mut();
         let mut hr = (uia.GetFocusedElement)(uia_raw, &mut elem_raw);
+        if (hr < 0 || elem_raw.is_null()) && !hwnd_target.is_null() {
+            hr = (uia.ElementFromHandle)(uia_raw, hwnd_target, &mut elem_raw);
+        }
         if (hr < 0 || elem_raw.is_null()) && !hwnd_fg.is_null() {
             hr = (uia.ElementFromHandle)(uia_raw, hwnd_fg, &mut elem_raw);
         }
@@ -421,6 +446,17 @@ fn get_uia_caret_word() -> Option<CaretWordContext> {
         if hr < 0 || pat_raw.is_null() {
             // Dự phòng TextPattern2 (ID 10024) cho các ứng dụng hiện đại (Chromium, Edge...)
             hr = (elem.vtbl().GetCurrentPattern)(elem.as_ptr(), 10024, &mut pat_raw);
+        }
+        if pat_raw.is_null() && !hwnd_target.is_null() {
+            let mut wnd_elem_raw: *mut c_void = null_mut();
+            if (uia.ElementFromHandle)(uia_raw, hwnd_target, &mut wnd_elem_raw) >= 0 && !wnd_elem_raw.is_null() {
+                if let Some(we) = ComPtr::<IUIAutomationElementVtbl>::new(wnd_elem_raw) {
+                    let _ = (we.vtbl().GetCurrentPattern)(we.as_ptr(), UIA_TEXT_PATTERN_ID, &mut pat_raw);
+                    if pat_raw.is_null() {
+                        let _ = (we.vtbl().GetCurrentPattern)(we.as_ptr(), 10024, &mut pat_raw);
+                    }
+                }
+            }
         }
         if pat_raw.is_null() && !hwnd_fg.is_null() {
             let mut wnd_elem_raw: *mut c_void = null_mut();
