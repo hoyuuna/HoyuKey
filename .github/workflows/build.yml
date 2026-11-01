@@ -33,7 +33,7 @@ jobs:
           "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "patch=$patch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Setting version to $ver in Cargo.toml..."
-          (Get-Content Cargo.toml) -replace 'version = "\d+\.\d+\.\d+"', "version = `"$ver`"" | Set-Content Cargo.toml
+          (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$ver`"" | Set-Content Cargo.toml
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
