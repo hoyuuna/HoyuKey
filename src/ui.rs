@@ -44,6 +44,7 @@ static FREE_MARKING_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static SMART_ENGLISH_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static MODIFY_TONE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
 static AUTO_RESTORE_PROGRESS: AtomicU32 = AtomicU32::new(1000);
+static SIMPLE_TELEX_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static INPUT_METHOD_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0 = Telex, 1000 = VNI
 static SWITCH_KEY_PROGRESS: AtomicU32 = AtomicU32::new(0);    // 0 = Ctrl+Shift, 1000 = Alt+Z
 const V_BGRA_32: &[u8] = include_bytes!("../icon/v_32.bin");
@@ -281,6 +282,8 @@ pub fn show_settings_window() {
         SMART_ENGLISH_PROGRESS.store(if state.config.smart_english { 1000 } else { 0 }, Ordering::SeqCst);
         MODIFY_TONE_PROGRESS.store(if state.config.modify_tone_in_word { 1000 } else { 0 }, Ordering::SeqCst);
         AUTO_RESTORE_PROGRESS.store(if state.config.auto_restore { 1000 } else { 0 }, Ordering::SeqCst);
+        let is_telex = state.config.input_method == InputMethod::Telex;
+        SIMPLE_TELEX_PROGRESS.store(if is_telex && state.config.simple_telex { 1000 } else { 0 }, Ordering::SeqCst);
         INPUT_METHOD_PROGRESS.store(if state.config.input_method == InputMethod::Vni { 1000 } else { 0 }, Ordering::SeqCst);
         SWITCH_KEY_PROGRESS.store(if state.config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, Ordering::SeqCst);
         START_WITH_WINDOWS_PROGRESS.store(if state.config.start_with_windows { 1000 } else { 0 }, Ordering::SeqCst);
@@ -449,6 +452,8 @@ unsafe extern "system" fn settings_wnd_proc(
                 advance_anim(if config.smart_english { 1000 } else { 0 }, &SMART_ENGLISH_PROGRESS);
                 advance_anim(if config.modify_tone_in_word { 1000 } else { 0 }, &MODIFY_TONE_PROGRESS);
                 advance_anim(if config.auto_restore { 1000 } else { 0 }, &AUTO_RESTORE_PROGRESS);
+                let is_telex = config.input_method == InputMethod::Telex;
+                advance_anim(if is_telex && config.simple_telex { 1000 } else { 0 }, &SIMPLE_TELEX_PROGRESS);
                 advance_anim(if config.input_method == InputMethod::Vni { 1000 } else { 0 }, &INPUT_METHOD_PROGRESS);
                 advance_anim(if config.switch_key == SwitchKey::AltZ { 1000 } else { 0 }, &SWITCH_KEY_PROGRESS);
                 advance_anim(if config.start_with_windows { 1000 } else { 0 }, &START_WITH_WINDOWS_PROGRESS);
@@ -598,6 +603,7 @@ unsafe extern "system" fn settings_wnd_proc(
 fn get_max_scroll_for_page(page: u8) -> i32 {
     match page {
         0 => 80,
+        1 => 46,
         2 => {
             let anim_p = RAM_LIMIT_ANIM.load(Ordering::SeqCst) as f32 / 1000.0;
             let anim_ease = 1.0 - (1.0 - anim_p).powi(3);
@@ -728,6 +734,12 @@ fn get_hovered_item(x: i32, y: i32, client_w: i32, page: u8) -> i32 {
                 }
                 if y_content >= 468 && y_content <= 512 {
                     return 45;
+                }
+                if y_content >= 540 && y_content <= 584 {
+                    let state = GLOBAL_STATE.lock().unwrap();
+                    if state.config.input_method == InputMethod::Telex {
+                        return 47;
+                    }
                 }
             }
         } else if page == 2 {
@@ -939,6 +951,7 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                 } else if x >= tab_x + 104 && x <= right_ctrl {
                     if state.config.input_method != InputMethod::Vni {
                         state.config.input_method = InputMethod::Vni;
+                        state.config.simple_telex = false;
                         changed = true;
                     }
                 }
@@ -960,6 +973,11 @@ fn handle_mouse_click(hwnd: HWND, x: i32, y: i32, client_w: i32) {
                 } else if y_content >= 468 && y_content <= 512 {
                     state.config.auto_restore = !state.config.auto_restore;
                     changed = true;
+                } else if y_content >= 540 && y_content <= 584 {
+                    if state.config.input_method == InputMethod::Telex {
+                        state.config.simple_telex = !state.config.simple_telex;
+                        changed = true;
+                    }
                 }
             }
         } else if page == 2 {
@@ -1483,7 +1501,7 @@ unsafe fn render_page_elements(
     card_w: i32,
     base_right_ctrl: i32,
     base_left_text: i32,
-    _config: &Config,
+    config: &Config,
     hover_id: i32,
     font_title: *mut GpFont,
     font_sub_title: *mut GpFont,
@@ -1613,8 +1631,8 @@ unsafe fn render_page_elements(
                 font_tab,
             );
 
-            // Card 2: 5 Tùy chọn đánh máy thông minh (y = 174..530, cao 356px)
-            gdiplus_draw_rounded_card(graphics, card_x, 174 - sy, card_w, 356, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
+            // Card 2: 6 Tùy chọn đánh máy thông minh (y = 174..602, cao 428px)
+            gdiplus_draw_rounded_card(graphics, card_x, 174 - sy, card_w, 428, 10, ARGB_CARD_BG, ARGB_CARD_BORDER, 1.0);
 
             // 1. Bỏ dấu kiểu mới
             draw_gdip_text(graphics, font_bold, "Bỏ dấu kiểu mới", left_text, 188 - sy, ARGB_TEXT_PRIMARY, false);
@@ -1653,6 +1671,17 @@ unsafe fn render_page_elements(
             draw_gdip_text(graphics, font_desc, "Hoàn lại ký tự ban đầu khi nhập từ không hợp lệ", left_text, 500 - sy, ARGB_TEXT_MUTED, false);
             let restore_progress = AUTO_RESTORE_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0;
             draw_animated_switch(graphics, right_ctrl - 50, 482 - sy, restore_progress);
+
+            gdiplus_draw_line(graphics, left_text, 534 - sy, right_ctrl, 534 - sy, ARGB_DIVIDER, 1.0);
+
+            // 6. Telex giản lược (mặc định tắt, tự động disable khi chọn VNI)
+            let is_vni = config.input_method == InputMethod::Vni;
+            let telex_title_color = if is_vni { ARGB_STATUS_MUTED } else { ARGB_TEXT_PRIMARY };
+            let telex_desc_color = if is_vni { 0x50808080 } else { ARGB_TEXT_MUTED };
+            draw_gdip_text(graphics, font_bold, "Telex giản lược", left_text, 548 - sy, telex_title_color, false);
+            draw_gdip_text(graphics, font_desc, "w đơn lẻ ra w, uow ra uơ, không hoàn tác dấu lặp", left_text, 572 - sy, telex_desc_color, false);
+            let simple_progress = if is_vni { 0.0 } else { SIMPLE_TELEX_PROGRESS.load(Ordering::SeqCst) as f32 / 1000.0 };
+            draw_animated_switch(graphics, right_ctrl - 50, 554 - sy, simple_progress);
 
         } else if page == 2 {
             // Card 1: Phím tắt chuyển đổi chế độ (cao 122px, y = 86..208)

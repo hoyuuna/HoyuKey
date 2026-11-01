@@ -276,8 +276,9 @@ unsafe extern "system" fn low_level_mouse_proc(
     if code >= 0 {
         let msg = wparam as u32;
         if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
-            // Người dùng click chuột ra vị trí khác -> kết thúc từ cũ ngay lập tức
-            reset_engine();
+            // Khi click chuột: khôi phục từ vừa gõ nếu có để cho phép sửa dấu/từ khi click chuột vào chữ
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.engine.on_mouse_click();
         }
     }
     CallNextHookEx(null_mut(), code, wparam, lparam)
@@ -425,7 +426,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
         VK_BACK => {
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             let mut state = GLOBAL_STATE.lock().unwrap();
-            let bs_action = state.engine.handle_backspace();
+            let simple_telex = state.config.simple_telex;
+            let bs_action = state.engine.handle_backspace(simple_telex);
             drop(state);
 
             if let Some(KeyAction::Transform { backspaces, text }) = bs_action {
@@ -452,7 +454,17 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
-        VK_ESCAPE | VK_TAB | VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_HOME
+        VK_LEFT => {
+            BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
+            let mut state = GLOBAL_STATE.lock().unwrap();
+            state.engine.on_arrow_left();
+            return CallNextHookEx(null_mut(), code, wparam, lparam);
+        }
+        VK_RIGHT => {
+            BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
+            return CallNextHookEx(null_mut(), code, wparam, lparam);
+        }
+        VK_ESCAPE | VK_TAB | VK_UP | VK_DOWN | VK_HOME
         | VK_END | VK_PRIOR | VK_NEXT => {
             reset_engine();
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);

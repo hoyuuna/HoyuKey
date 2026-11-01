@@ -28,6 +28,8 @@ pub struct Config {
     pub smart_english: bool,
     /// Tự động điều chỉnh dấu thanh khi sửa nguyên âm trong từ (khí -> khái)
     pub modify_tone_in_word: bool,
+    /// Telex giản lược (chỉ áp dụng khi kiểu gõ là Telex)
+    pub simple_telex: bool,
     /// Khởi động cùng Windows khi đăng nhập máy tính
     pub start_with_windows: bool,
     /// Tự động viết hoa chữ cái đầu dòng
@@ -63,6 +65,7 @@ impl Default for Config {
             free_marking: true,
             smart_english: true,
             modify_tone_in_word: true,
+            simple_telex: false,
             start_with_windows: false,
             auto_caps_line: false,
             auto_caps_sentence: false,
@@ -161,7 +164,7 @@ impl Config {
     pub fn to_json_string(&self) -> String {
         let escaped_browser_apps = self.browser_apps.replace('\\', "\\\\").replace('"', "\\\"");
         format!(
-            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {},\n  \"limit_ram\": {},\n  \"max_ram_mb\": {},\n  \"notify_on_startup\": {},\n  \"notify_on_toggle\": {}\n}}\n",
+            "{{\n  \"enabled\": {},\n  \"input_method\": \"{}\",\n  \"modern_tone\": {},\n  \"switch_key\": \"{}\",\n  \"auto_restore\": {},\n  \"free_marking\": {},\n  \"smart_english\": {},\n  \"modify_tone_in_word\": {},\n  \"simple_telex\": {},\n  \"start_with_windows\": {},\n  \"auto_caps_line\": {},\n  \"auto_caps_sentence\": {},\n  \"auto_period_enter\": {},\n  \"browser_compatibility\": {},\n  \"browser_apps\": \"{}\",\n  \"remember_app_state\": {},\n  \"limit_ram\": {},\n  \"max_ram_mb\": {},\n  \"notify_on_startup\": {},\n  \"notify_on_toggle\": {}\n}}\n",
             self.enabled,
             match self.input_method {
                 InputMethod::Telex => "Telex",
@@ -176,6 +179,7 @@ impl Config {
             self.free_marking,
             self.smart_english,
             self.modify_tone_in_word,
+            self.simple_telex,
             self.start_with_windows,
             self.auto_caps_line,
             self.auto_caps_sentence,
@@ -214,6 +218,7 @@ impl Config {
                 "free_marking" => self.free_marking = val == "true",
                 "smart_english" => self.smart_english = val == "true",
                 "modify_tone_in_word" => self.modify_tone_in_word = val == "true",
+                "simple_telex" => self.simple_telex = val == "true",
                 "auto_caps_line" => self.auto_caps_line = val == "true",
                 "auto_caps_sentence" => self.auto_caps_sentence = val == "true",
                 "auto_period_enter" => self.auto_period_enter = val == "true",

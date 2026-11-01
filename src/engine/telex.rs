@@ -6,6 +6,7 @@ pub fn transform_telex(
     modern_tone: bool,
     free_marking: bool,
     smart_english: bool,
+    simple_telex: bool,
 ) -> Option<String> {
     let key_lower = key.to_ascii_lowercase();
     let is_key_upper = key.is_ascii_uppercase();
@@ -18,21 +19,21 @@ pub fn transform_telex(
 
     // 1. Xử lý 'dd' -> 'đ', 'đd' -> 'dd'
     if key_lower == 'd' {
-        if let Some(res) = handle_d_modifier(word, is_key_upper, free_marking) {
+        if let Some(res) = handle_d_modifier(word, is_key_upper, free_marking, simple_telex) {
             return Some(res);
         }
     }
 
     // 2. Xử lý dấu mũ/móc/trăng: 'a', 'e', 'o', 'w'
     if matches!(key_lower, 'a' | 'e' | 'o' | 'w') {
-        if let Some(res) = handle_vowel_modifier(word, key_lower, is_key_upper, free_marking) {
+        if let Some(res) = handle_vowel_modifier(word, key_lower, is_key_upper, free_marking, simple_telex) {
             return Some(res);
         }
     }
 
     // 3. Xử lý dấu thanh: 's', 'f', 'r', 'x', 'j', 'z'
     if matches!(key_lower, 's' | 'f' | 'r' | 'x' | 'j' | 'z') {
-        if let Some(res) = handle_tone_modifier(word, key, modern_tone) {
+        if let Some(res) = handle_tone_modifier(word, key, modern_tone, simple_telex) {
             return Some(res);
         }
     }
@@ -92,7 +93,7 @@ pub fn is_foreign_multisyllable_word(word: &str) -> bool {
 }
 
 /// Xử lý biến đổi 'd' <-> 'đ' thông minh và tự do ở mọi vị trí (ví dụ 'dặt' + 'd' -> 'đặt')
-fn handle_d_modifier(word: &str, is_upper: bool, free_marking: bool) -> Option<String> {
+fn handle_d_modifier(word: &str, is_upper: bool, free_marking: bool, simple_telex: bool) -> Option<String> {
     let mut chars: Vec<char> = word.chars().collect();
     if chars.is_empty() {
         return None;
@@ -103,6 +104,10 @@ fn handle_d_modifier(word: &str, is_upper: bool, free_marking: bool) -> Option<S
 
     // 1. 'đ' + 'd' -> 'dd' (hoàn tác ngay ký tự cuối)
     if last_char == 'đ' || last_char == 'Đ' {
+        if simple_telex {
+            // Telex giản lược: Không hỗ trợ hoàn tác. Gõ phím thứ 3 sẽ nối tiếp chữ đó (ví dụ 'ddd' -> 'đd')
+            return None;
+        }
         chars[last_idx] = if last_char == 'Đ' { 'D' } else { 'd' };
         chars.push(if is_upper { 'D' } else { 'd' });
         return Some(chars.into_iter().collect());
@@ -128,10 +133,12 @@ fn handle_d_modifier(word: &str, is_upper: bool, free_marking: bool) -> Option<S
             }
 
             // 4. Nếu từ đã có 'đ'/'Đ' và người dùng gõ thêm 'd' ở cuối từ -> hoàn tác 'đ' thành 'd' và chèn 'd' vào cuối
-            if let Some(pos) = chars.iter().position(|&c| c == 'đ' || c == 'Đ') {
-                chars[pos] = if chars[pos] == 'Đ' { 'D' } else { 'd' };
-                chars.push(if is_upper { 'D' } else { 'd' });
-                return Some(chars.into_iter().collect());
+            if !simple_telex {
+                if let Some(pos) = chars.iter().position(|&c| c == 'đ' || c == 'Đ') {
+                    chars[pos] = if chars[pos] == 'Đ' { 'D' } else { 'd' };
+                    chars.push(if is_upper { 'D' } else { 'd' });
+                    return Some(chars.into_iter().collect());
+                }
             }
         }
     }
@@ -140,10 +147,14 @@ fn handle_d_modifier(word: &str, is_upper: bool, free_marking: bool) -> Option<S
 }
 
 /// Xử lý dấu mũ, trăng, móc: 'aa' -> 'â', 'aw' -> 'ă', 'ee' -> 'ê', 'oo' -> 'ô', 'ow' -> 'ơ', 'uw' -> 'ư', 'w' -> 'ư'
-fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bool) -> Option<String> {
+fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bool, simple_telex: bool) -> Option<String> {
     let chars: Vec<char> = word.chars().collect();
     if chars.is_empty() {
         if key == 'w' {
+            if simple_telex {
+                // Telex giản lược: 'w' đứng đơn lẻ ra chữ 'w'!
+                return None;
+            }
             return Some(if is_upper { "Ư".to_string() } else { "ư".to_string() });
         }
         return None;
@@ -165,6 +176,10 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
         };
 
         if undo_match {
+            if simple_telex {
+                // Telex giản lược: Không hỗ trợ hoàn tác mũ/móc. Gõ phím thứ 3 nối tiếp chữ đó (aaa -> âa)
+                return None;
+            }
             let mut new_chars = chars.clone();
 
             // Nếu người dùng gõ 'w' khi ký tự cuối là 'ư'/'Ư' mà trước đó không phải là nguyên âm:
@@ -192,7 +207,8 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
     }
 
     // 2. Xử lý 'uow' / 'ươ' và 'uaw' / 'ưa' khi gặp 'w'
-    if key == 'w' {
+    // Telex giản lược: Không tự đổi cả cặp 'uo' -> 'ươ', phải gõ rõ 'uwow' mới ra 'ươ'!
+    if key == 'w' && !simple_telex {
         // Xử lý 'ua' + 'w' -> 'ưa' (ví dụ: 'cua' + 'w' -> 'cưa', 'mua' + 'w' -> 'mưa', 'chua' + 'w' -> 'chưa')
         // Ngoại trừ khi đi sau 'q'/'Q' (như 'qua' + 'w' -> 'quă')
         let mut found_ua = None;
@@ -377,28 +393,30 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
             // Hoàn tác mũ/móc tự do nếu gõ lặp lại (ví dụ 'đôt' + 'o' -> 'đoto', 'hiên' + 'e' -> 'hiene')
             let mut undo_idx = None;
             let mut undo_base = ' ';
-            for &idx in vowel_indices.iter().rev() {
-                if key != 'w' {
-                    let has_vowel_after = chars[idx + 1..].iter().any(|&c| decompose_vietnamese_char(c).is_some());
-                    if has_vowel_after {
-                        continue;
+            if !simple_telex {
+                for &idx in vowel_indices.iter().rev() {
+                    if key != 'w' {
+                        let has_vowel_after = chars[idx + 1..].iter().any(|&c| decompose_vietnamese_char(c).is_some());
+                        if has_vowel_after {
+                            continue;
+                        }
                     }
-                }
 
-                if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
-                    let is_undo = match (base, vmod, key) {
-                        ('a', VowelMod::Hat, 'a') => true,
-                        ('a', VowelMod::Breve, 'w') => true,
-                        ('e', VowelMod::Hat, 'e') => true,
-                        ('o', VowelMod::Hat, 'o') => true,
-                        ('o', VowelMod::Horn, 'w') => true,
-                        ('u', VowelMod::Horn, 'w') => true,
-                        _ => false,
-                    };
-                    if is_undo {
-                        undo_idx = Some(idx);
-                        undo_base = base;
-                        break;
+                    if let Some((base, vmod, _, _)) = decompose_vietnamese_char(chars[idx]) {
+                        let is_undo = match (base, vmod, key) {
+                            ('a', VowelMod::Hat, 'a') => true,
+                            ('a', VowelMod::Breve, 'w') => true,
+                            ('e', VowelMod::Hat, 'e') => true,
+                            ('o', VowelMod::Hat, 'o') => true,
+                            ('o', VowelMod::Horn, 'w') => true,
+                            ('u', VowelMod::Horn, 'w') => true,
+                            _ => false,
+                        };
+                        if is_undo {
+                            undo_idx = Some(idx);
+                            undo_base = base;
+                            break;
+                        }
                     }
                 }
             }
@@ -417,8 +435,8 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
 }
 
     // 5. Nếu gõ 'w' độc lập sau phụ âm tiếng Việt (ví dụ: 't' + 'w' -> 'tư', 's' + 'w' -> 'sư')
-    // Chú ý: Không áp dụng nếu ký tự trước là 'w' hoặc ngoại lai để người dùng có thể gõ 'ww', 'www' bình thường
-    if key == 'w' && last_c.is_alphabetic() && super::vietnamese::is_consonant(last_c) {
+    // Chú ý: Không áp dụng nếu ký tự trước là 'w' hoặc ngoại lai, và KHÔNG áp dụng khi bật simple_telex
+    if !simple_telex && key == 'w' && last_c.is_alphabetic() && super::vietnamese::is_consonant(last_c) {
         let mut new_chars = chars.clone();
         new_chars.push(if is_upper { 'Ư' } else { 'ư' });
         return Some(new_chars.into_iter().collect());
@@ -428,7 +446,7 @@ fn handle_vowel_modifier(word: &str, key: char, is_upper: bool, free_marking: bo
 }
 
 /// Xử lý đặt dấu thanh tự do: 's', 'f', 'r', 'x', 'j', 'z'
-pub fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<String> {
+pub fn handle_tone_modifier(word: &str, key: char, modern_tone: bool, simple_telex: bool) -> Option<String> {
     let key_lower = key.to_ascii_lowercase();
     let target_tone = match key_lower {
         's' => Tone::Acute,
@@ -468,6 +486,10 @@ pub fn handle_tone_modifier(word: &str, key: char, modern_tone: bool) -> Option<
 
     // 1. Hoàn tác nếu gõ lặp lại cùng phím dấu thanh (ví dụ 'toán' + 's' -> 'toans', 'DÁ' + 'S' -> 'DAS', 'DÁ' + 's' -> 'DAs')
     if target_tone == current_tone && target_tone != Tone::None {
+        if simple_telex {
+            // Telex giản lược: Không hỗ trợ. Gõ tiếp phím dấu sẽ chèn thêm phím đó (ví dụ: as -> á, gõ tiếp s -> ás)
+            return None;
+        }
         let mut new_chars = chars.clone();
         for &idx in &vowel_indices {
             let (base, vmod, _, is_upper) = decompose_vietnamese_char(new_chars[idx])?;

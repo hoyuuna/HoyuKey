@@ -90,7 +90,20 @@ impl Engine {
     /// Xử lý phím Backspace:
     /// Đồng bộ xóa ký tự trong bộ đệm và cho phím Backspace vật lý đi qua tự nhiên.
     /// Nếu vừa gõ xong từ rồi gõ space (ví dụ "dụ "), ấn Backspace xóa space sẽ khôi phục từ để có thể gõ tiếp.
-    pub fn handle_backspace(&mut self) -> Option<KeyAction> {
+    pub fn handle_backspace(&mut self, simple_telex: bool) -> Option<KeyAction> {
+        if simple_telex {
+            // Telex giản lược: Không tự động can thiệp hay khôi phục tổ hợp phím trước đó
+            if !self.current_word.is_empty() {
+                self.current_word.pop();
+                self.raw_keys.pop();
+                if self.current_word.is_empty() {
+                    self.raw_keys.clear();
+                    self.has_transformed = false;
+                }
+            }
+            return None;
+        }
+
         if self.current_word.is_empty() {
             if let Some((word, raw, transformed)) = self.last_word_before_space.take() {
                 self.current_word = word;
@@ -107,6 +120,28 @@ impl Engine {
             self.has_transformed = false;
         }
         None
+    }
+
+    /// Khôi phục từ vừa gõ khi bấm mũi tên trái (cho phép sửa dấu / từ mà không cần Backspace)
+    pub fn on_arrow_left(&mut self) {
+        if self.current_word.is_empty() {
+            if let Some((word, raw, transformed)) = self.last_word_before_space.clone() {
+                self.current_word = word;
+                self.raw_keys = raw;
+                self.has_transformed = transformed;
+            }
+        }
+    }
+
+    /// Khôi phục từ vừa gõ khi bấm chuột vào chữ (cho phép sửa dấu / từ khi click chuột)
+    pub fn on_mouse_click(&mut self) {
+        if self.current_word.is_empty() {
+            if let Some((word, raw, transformed)) = self.last_word_before_space.clone() {
+                self.current_word = word;
+                self.raw_keys = raw;
+                self.has_transformed = transformed;
+            }
+        }
     }
 
     /// Xử lý một ký tự gõ vào
@@ -192,6 +227,7 @@ impl Engine {
                 config.modern_tone,
                 config.free_marking,
                 config.smart_english,
+                config.simple_telex,
             ),
             InputMethod::Vni => vni::transform_vni(
                 &self.current_word,
@@ -221,7 +257,7 @@ impl Engine {
                 let chars: Vec<char> = self.current_word.chars().collect();
                 let vowel_indices = telex::extract_vowel_indices(&chars);
                 let starts_with_d_stroke = self.current_word.starts_with('đ') || self.current_word.starts_with('Đ');
-                if config.auto_restore && !starts_with_d_stroke && !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&self.current_word) {
+                if config.auto_restore && !config.simple_telex && !starts_with_d_stroke && !vowel_indices.is_empty() && !is_valid_vietnamese_syllable(&self.current_word) {
                     let bs = self.current_word.chars().count();
                     let text = self.raw_keys.clone();
                     self.current_word = text.clone();
@@ -261,7 +297,7 @@ impl Engine {
                 };
 
                 if tone_key != ' ' {
-                    if let Some(rebalanced_word) = telex::handle_tone_modifier(&temp_word, tone_key, config.modern_tone) {
+                    if let Some(rebalanced_word) = telex::handle_tone_modifier(&temp_word, tone_key, config.modern_tone, config.simple_telex) {
                         let mut expected_no_move = self.current_word.clone();
                         expected_no_move.push(c);
 
@@ -271,7 +307,7 @@ impl Engine {
                             self.current_word = rebalanced_word.clone();
                             self.has_transformed = true;
 
-                            if config.auto_restore && !is_valid_vietnamese_syllable(&self.current_word) {
+                            if config.auto_restore && !config.simple_telex && !is_valid_vietnamese_syllable(&self.current_word) {
                                 let bs = backspaces;
                                 let text = self.raw_keys.clone();
                                 self.current_word = text.clone();
@@ -297,7 +333,7 @@ impl Engine {
         // QUY TẮC CỐT LÕI: Chỉ kích hoạt Auto-Restore khi từ ĐÃ CÓ NGUYÊN ÂM (đã hình thành vần âm tiết).
         // Nếu từ chưa có nguyên âm nào (ví dụ: đt, đc, đk, đz, đm, đcl... và mọi kiểu viết tắt / teencode sáng tạo tự do),
         // bộ gõ tuyệt đối KHÔNG rollback, tôn trọng 100% mọi phong cách viết tắt không giới hạn của người dùng!
-        if config.auto_restore && self.has_transformed {
+        if config.auto_restore && !config.simple_telex && self.has_transformed {
             let starts_with_d_stroke = self.current_word.starts_with('đ') || self.current_word.starts_with('Đ');
             if !starts_with_d_stroke {
                 let mut test_word = self.current_word.clone();
@@ -527,6 +563,95 @@ mod tests {
         let a4 = engine.process_char('d', &config);
         assert_eq!(a4, KeyAction::PassThrough);
         assert_eq!(engine.current_word, "ddd");
+    }
+
+    #[test]
+    fn test_simple_telex_rules() {
+        let mut engine = Engine::new();
+        let mut config = Config::default();
+        config.simple_telex = true;
+
+        // Tiêu chí 1: w đứng đơn lẻ ra 'w'
+        engine.reset();
+        engine.process_char('w', &config);
+        assert_eq!(engine.current_word, "w");
+
+        // Tiêu chí 2: uo + w -> uơ (không tự đổi cả cặp), phải uwow mới ra ươ
+        engine.reset();
+        for ch in "uow".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "uơ");
+
+        engine.reset();
+        for ch in "uwow".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "ươ");
+
+        // Tiêu chí 3: as -> á, gõ tiếp s -> ás (không xóa dấu)
+        engine.reset();
+        for ch in "as".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "á");
+        engine.process_char('s', &config);
+        assert_eq!(engine.current_word, "ás");
+
+        // Tiêu chí 4: Gõ lặp lại phím mũ: aaa -> âa, ddd -> đd
+        engine.reset();
+        for ch in "aaa".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "âa");
+
+        engine.reset();
+        for ch in "ddd".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "đd");
+
+        // Tiêu chí 5: Backspace không khôi phục trạng thái từ trước khoảng trắng
+        engine.reset();
+        for ch in "hocj ".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "");
+        engine.handle_backspace(true);
+        // Trong simple_telex, không khôi phục từ trước khoảng trắng:
+        assert_eq!(engine.current_word, "");
+    }
+
+    #[test]
+    fn test_arrow_left_and_mouse_click_restore() {
+        let mut engine = Engine::new();
+        let config = Config::default();
+
+        // Gõ "hocj " -> "học "
+        for ch in "hocj ".chars() {
+            engine.process_char(ch, &config);
+        }
+        assert_eq!(engine.current_word, "");
+
+        // Bấm mũi tên trái quay về từ -> khôi phục "học"
+        engine.on_arrow_left();
+        assert_eq!(engine.current_word, "học");
+
+        // Gõ 's' sửa dấu -> "hóc"
+        engine.process_char('s', &config);
+        assert_eq!(engine.current_word, "hóc");
+
+        // Thử lại với bấm chuột:
+        engine.process_char(' ', &config);
+        assert_eq!(engine.current_word, "");
+
+        // Bấm chuột vào từ -> khôi phục "hóc"
+        engine.on_mouse_click();
+        assert_eq!(engine.current_word, "hóc");
+
+        // Gõ 'j' sửa dấu -> "hoc"
+        engine.process_char('j', &config);
+        assert_eq!(engine.current_word, "hoc");
     }
 
     #[test]

@@ -250,6 +250,7 @@ fn handle_tray_command(cmd_id: usize) {
         }
         IDM_VNI => {
             state.config.input_method = InputMethod::Vni;
+            state.config.simple_telex = false;
             state.config.save();
         }
         IDM_MODERN_TONE => {
