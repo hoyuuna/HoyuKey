@@ -566,6 +566,18 @@ unsafe extern "system" fn low_level_keyboard_proc(
                                 return 1;
                             }
                         }
+                    } else {
+                        // Dự phòng Cách 2: Chọn từ & clipboard replacement cho các app không hỗ trợ UIA (Chrome, Electron, web...)
+                        trigger_selection_replacement(
+                            ch,
+                            is_telex,
+                            modern_tone,
+                            free_marking,
+                            smart_english,
+                            simple_telex,
+                        );
+                        BLOCKED_VK[vk_idx].store(true, Ordering::SeqCst);
+                        return 1;
                     }
                 }
             }
@@ -813,4 +825,249 @@ unsafe fn send_replace_batch(deletes: usize, backspaces: usize, text: &str) {
 /// Gửi chuẩn Win32 API tương thích hoàn hảo với mọi ứng dụng, trình duyệt Chrome, Edge, Firefox, Word, Excel.
 unsafe fn send_transform_batch(backspaces: usize, text: &str) {
     send_replace_batch(0, backspaces, text);
+}
+
+const CF_UNICODETEXT: u32 = 13;
+const GHND: u32 = 0x0042;
+
+#[link(name = "user32")]
+extern "system" {
+    fn OpenClipboard(hWndNewOwner: HWND) -> i32;
+    fn CloseClipboard() -> i32;
+    fn EmptyClipboard() -> i32;
+    fn GetClipboardData(uFormat: u32) -> *mut std::ffi::c_void;
+    fn SetClipboardData(uFormat: u32, hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> *mut std::ffi::c_void;
+    fn GlobalLock(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn GlobalUnlock(hMem: *mut std::ffi::c_void) -> i32;
+}
+
+unsafe fn get_clipboard_text() -> Option<String> {
+    for _ in 0..6 {
+        if OpenClipboard(null_mut()) != 0 {
+            let handle = GetClipboardData(CF_UNICODETEXT);
+            if !handle.is_null() {
+                let ptr = GlobalLock(handle) as *const u16;
+                if !ptr.is_null() {
+                    let mut len = 0;
+                    while *ptr.add(len) != 0 {
+                        len += 1;
+                    }
+                    let slice = std::slice::from_raw_parts(ptr, len);
+                    let s = String::from_utf16_lossy(slice);
+                    GlobalUnlock(handle);
+                    CloseClipboard();
+                    return Some(s);
+                }
+            }
+            CloseClipboard();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    None
+}
+
+unsafe fn set_clipboard_text(text: &str) -> bool {
+    for _ in 0..6 {
+        if OpenClipboard(null_mut()) != 0 {
+            EmptyClipboard();
+            let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let bytes = utf16.len() * std::mem::size_of::<u16>();
+            let handle = GlobalAlloc(GHND, bytes);
+            if !handle.is_null() {
+                let ptr = GlobalLock(handle) as *mut u16;
+                if !ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr, utf16.len());
+                    GlobalUnlock(handle);
+                    SetClipboardData(CF_UNICODETEXT, handle);
+                }
+            }
+            CloseClipboard();
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
+}
+
+unsafe fn send_key_combo(vks: &[u16]) {
+    let mut inputs = Vec::new();
+    for &vk in vks {
+        let mut down: INPUT = std::mem::zeroed();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT {
+            wVk: vk,
+            wScan: 0,
+            dwFlags: 0,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(down);
+    }
+    for &vk in vks.iter().rev() {
+        let mut up: INPUT = std::mem::zeroed();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT {
+            wVk: vk,
+            wScan: 0,
+            dwFlags: KEYEVENTF_KEYUP,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(up);
+    }
+    SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+}
+
+unsafe fn send_single_key(vk: u16) {
+    send_key_combo(&[vk]);
+}
+
+unsafe fn send_replace_text(text: &str) {
+    let mut inputs = Vec::new();
+    for c in text.encode_utf16() {
+        let mut down: INPUT = std::mem::zeroed();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT {
+            wVk: 0,
+            wScan: c,
+            dwFlags: KEYEVENTF_UNICODE,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(down);
+
+        let mut up: INPUT = std::mem::zeroed();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT {
+            wVk: 0,
+            wScan: c,
+            dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+            time: 0,
+            dwExtraInfo: HOYU_MAGIC_EXTRA_INFO,
+        };
+        inputs.push(up);
+    }
+    SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+}
+
+static REPLACING: AtomicBool = AtomicBool::new(false);
+
+fn trigger_selection_replacement(
+    ch: char,
+    is_telex: bool,
+    modern_tone: bool,
+    free_marking: bool,
+    smart_english: bool,
+    simple_telex: bool,
+) {
+    if REPLACING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        perform_selection_replacement(ch, is_telex, modern_tone, free_marking, smart_english, simple_telex);
+        REPLACING.store(false, Ordering::SeqCst);
+    });
+}
+
+fn perform_selection_replacement(
+    ch: char,
+    is_telex: bool,
+    modern_tone: bool,
+    free_marking: bool,
+    smart_english: bool,
+    simple_telex: bool,
+) {
+    unsafe {
+        // 1. Sao lưu clipboard hiện tại của người dùng
+        let old_clipboard = get_clipboard_text();
+
+        // 2. Xóa clipboard để đợi dữ liệu mới
+        if OpenClipboard(null_mut()) != 0 {
+            EmptyClipboard();
+            CloseClipboard();
+        }
+
+        // 3. Gửi Ctrl + Shift + Left để bôi đen từ trước con trỏ
+        send_key_combo(&[VK_CONTROL, VK_SHIFT, VK_LEFT]);
+        // Gửi Ctrl + C để copy
+        send_key_combo(&[VK_CONTROL, b'C' as u16]);
+
+        // 4. Chờ ứng dụng đưa dữ liệu vào clipboard (tối đa 40ms)
+        let mut copied = None;
+        for _ in 0..8 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if let Some(text) = get_clipboard_text() {
+                if !text.is_empty() {
+                    copied = Some(text);
+                    break;
+                }
+            }
+        }
+
+        let mut transformed_word = None;
+        if let Some(ref text) = copied {
+            let trimmed = text.trim();
+            if !trimmed.is_empty()
+                && trimmed.chars().count() <= 10
+                && trimmed.chars().all(|c| c.is_alphabetic())
+            {
+                let res = if is_telex {
+                    crate::engine::telex::transform_telex(
+                        trimmed,
+                        ch,
+                        modern_tone,
+                        free_marking,
+                        smart_english,
+                        simple_telex,
+                    )
+                } else {
+                    crate::engine::vni::transform_vni(
+                        trimmed,
+                        ch,
+                        modern_tone,
+                        free_marking,
+                        smart_english,
+                    )
+                };
+                if let Some(new_w) = res {
+                    if new_w != trimmed {
+                        transformed_word = Some(new_w);
+                    }
+                }
+            }
+        }
+
+        if let Some(new_word) = transformed_word {
+            // Thay thế từ đã bôi đen bằng từ mới
+            send_replace_text(&new_word);
+
+            // Cập nhật engine
+            if let Ok(mut state) = GLOBAL_STATE.lock() {
+                state.engine.current_word = new_word.clone();
+                state.engine.raw_keys = new_word.clone();
+                state.engine.has_transformed = true;
+            }
+        } else {
+            // Không phải từ hợp lệ: Hủy bôi đen bằng Right Arrow và đưa phím gốc vào
+            send_single_key(VK_RIGHT);
+            send_replace_text(&ch.to_string());
+
+            if let Ok(mut state) = GLOBAL_STATE.lock() {
+                let s = &mut *state;
+                s.engine.process_char(ch, &s.config);
+            }
+        }
+
+        // 5. Khôi phục lại clipboard cũ của người dùng
+        if let Some(old) = old_clipboard {
+            set_clipboard_text(&old);
+        }
+    }
 }
