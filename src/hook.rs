@@ -562,6 +562,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 free_marking,
                 smart_english,
                 simple_telex,
+                modify_tone_in_word,
                 is_empty,
                 caret_needs_check,
                 is_after_whitespace,
@@ -576,6 +577,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     state.config.free_marking,
                     state.config.smart_english,
                     state.config.simple_telex,
+                    state.config.modify_tone_in_word,
                     state.engine.current_word.is_empty(),
                     state.engine.caret_needs_check,
                     state.engine.has_space_before
@@ -611,6 +613,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                                 free_marking,
                                 smart_english,
                                 simple_telex,
+                                modify_tone_in_word,
                                 None,
                             )
                         } else {
@@ -620,6 +623,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                                 modern_tone,
                                 free_marking,
                                 smart_english,
+                                modify_tone_in_word,
                             )
                         };
 

@@ -3,8 +3,9 @@
 
 use crate::config::{InputMethod, TypingConfig};
 use crate::delta::compute_minimal_delta;
-use crate::phonotactics::is_valid_vietnamese_phonotactics;
+use crate::phonotactics::{decompose_word, is_valid_vietnamese_phonotactics};
 use crate::telex;
+use crate::vietnamese::Tone;
 use crate::vni;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -291,6 +292,7 @@ impl Engine {
                 config.free_marking,
                 config.smart_english,
                 config.simple_telex,
+                config.modify_tone_in_word,
                 Some(&self.raw_keys),
             ),
             InputMethod::Vni => vni::transform_vni(
@@ -299,6 +301,7 @@ impl Engine {
                 config.modern_tone,
                 config.free_marking,
                 config.smart_english,
+                config.modify_tone_in_word,
             ),
         };
 
@@ -353,6 +356,35 @@ impl Engine {
         }
 
         // 5. Gõ ký tự thông thường
+        let candidate_with_ch = format!("{}{}", self.current_word, ch);
+
+        // Chuẩn UniKey / OpenKey (modify_tone_in_word):
+        // Tự động đổi vị trí dấu khi thêm ký tự vào từ đã có dấu (ví dụ: 'hòa' + 'n' -> 'hoàn', 'hóa' + 'n' -> 'hoán')
+        if config.modify_tone_in_word && has_vietnamese_diacritic(&self.current_word) {
+            if let Some(mut decomp) = decompose_word(&candidate_with_ch) {
+                let existing_tone = decomp.current_tone();
+                if existing_tone != Tone::None {
+                    decomp.apply_tone(existing_tone, config.modern_tone);
+                    let re_toned = decomp.recompose();
+                    if re_toned != candidate_with_ch {
+                        let delta = compute_minimal_delta(&self.current_word, &re_toned);
+                        self.current_word = re_toned.clone();
+                        self.raw_keys.push(ch);
+                        self.has_transformed = true;
+                        self.history.push(EngineStep {
+                            display_word: self.current_word.clone(),
+                            raw_keys: self.raw_keys.clone(),
+                            has_transformed: true,
+                        });
+                        return KeyAction::Transform {
+                            backspaces: delta.backspaces,
+                            text: delta.text,
+                        };
+                    }
+                }
+            }
+        }
+
         self.current_word.push(ch);
         self.raw_keys.push(ch);
         let has_trans = has_vietnamese_diacritic(&self.current_word);
@@ -948,5 +980,20 @@ mod tests {
         assert_eq!(type_with_cfg(&mut engine, "uw", &simple_cfg), "ư");
         assert_eq!(type_with_cfg(&mut engine, "uow", &simple_cfg), "ươ");
         assert_eq!(type_with_cfg(&mut engine, "duwowngf", &simple_cfg), "đường");
+
+        // 8. Kiểm tra modify_tone_in_word (Tự chỉnh dấu khi sửa từ / Cho phép sửa dấu trong từ):
+        // Khi modify_tone_in_word = true (mặc định):
+        // - Gõ 'h' 'o' 'a' 'f' -> 'hòa' (hoặc 'hoà' tùy modern_tone). Gõ tiếp 'n' -> tự động dời dấu sang âm chính thành 'hoàn'!
+        // - Gõ 't' 'o' 'a' 'n' 's' -> 'toán'. Gõ tiếp 'f' -> tự đổi dấu thành 'toàn'!
+        let def_cfg = TypingConfig::default();
+        assert_eq!(type_with_cfg(&mut engine, "hoafn", &def_cfg), "hoàn");
+        assert_eq!(type_with_cfg(&mut engine, "hoasn", &def_cfg), "hoán");
+        assert_eq!(type_with_cfg(&mut engine, "toansf", &def_cfg), "toàn");
+
+        // Khi modify_tone_in_word = false:
+        // - Đã có dấu thì gõ phím dấu khác không được phép đổi dấu ('toán' + 'f' -> 'toánf')
+        let mut no_modify_cfg = TypingConfig::default();
+        no_modify_cfg.modify_tone_in_word = false;
+        assert_eq!(type_with_cfg(&mut engine, "toansf", &no_modify_cfg), "toánf");
     }
 }

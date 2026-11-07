@@ -18,6 +18,7 @@ pub fn transform_telex(
     free_marking: bool,
     smart_english: bool,
     simple_telex: bool,
+    modify_tone_in_word: bool,
     raw_keys: Option<&str>,
 ) -> Option<String> {
     if word.is_empty() {
@@ -83,7 +84,7 @@ pub fn transform_telex(
 
     // 5. Phím dấu thanh: 's', 'f', 'r', 'x', 'j', 'z'
     if matches!(key_lower, 's' | 'f' | 'r' | 'x' | 'j' | 'z') {
-        if let Some(res) = handle_tone_key(word, key_lower, modern_tone, free_marking) {
+        if let Some(res) = handle_tone_key(word, key_lower, modern_tone, free_marking, modify_tone_in_word) {
             return Some(res);
         }
     }
@@ -472,6 +473,7 @@ fn handle_tone_key(
     key: char,
     modern_tone: bool,
     free_marking: bool,
+    modify_tone_in_word: bool,
 ) -> Option<String> {
     let mut decomp = decompose_word(word)?;
     if decomp.vowels.is_empty() {
@@ -499,6 +501,13 @@ fn handle_tone_key(
         decomp.clear_tone();
         let base_word = decomp.recompose();
         return Some(format!("{}{}", base_word, key));
+    }
+
+    // Nếu tắt "Cho phép sửa dấu trong từ" (modify_tone_in_word == false):
+    // Khi từ đã có dấu thanh khác None, và người dùng gõ phím dấu khác:
+    // Tuyệt đối không cho phép đổi dấu thanh!
+    if !modify_tone_in_word && current != Tone::None && target_tone != Tone::None {
+        return None;
     }
 
     decomp.apply_tone(target_tone, modern_tone);

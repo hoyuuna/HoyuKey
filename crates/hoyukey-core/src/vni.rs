@@ -11,6 +11,7 @@ pub fn transform_vni(
     modern_tone: bool,
     free_marking: bool,
     smart_english: bool,
+    modify_tone_in_word: bool,
 ) -> Option<String> {
     if word.is_empty() {
         return None;
@@ -23,7 +24,7 @@ pub fn transform_vni(
     match key {
         // 1..=5: Dấu thanh, 0: Xóa dấu
         '1' | '2' | '3' | '4' | '5' | '0' => {
-            handle_vni_tone(word, key, modern_tone, free_marking)
+            handle_vni_tone(word, key, modern_tone, free_marking, modify_tone_in_word)
         }
         // 6: Dấu mũ (â, ê, ô)
         '6' => handle_vni_hat(word, free_marking, modern_tone),
@@ -37,7 +38,13 @@ pub fn transform_vni(
     }
 }
 
-fn handle_vni_tone(word: &str, key: char, modern_tone: bool, free_marking: bool) -> Option<String> {
+fn handle_vni_tone(
+    word: &str,
+    key: char,
+    modern_tone: bool,
+    free_marking: bool,
+    modify_tone_in_word: bool,
+) -> Option<String> {
     let mut decomp = decompose_word(word)?;
     if decomp.vowels.is_empty() {
         return None;
@@ -64,6 +71,11 @@ fn handle_vni_tone(word: &str, key: char, modern_tone: bool, free_marking: bool)
         decomp.clear_tone();
         let base = decomp.recompose();
         return Some(format!("{}{}", base, key));
+    }
+
+    // Nếu tắt "Cho phép sửa dấu trong từ" (modify_tone_in_word == false):
+    if !modify_tone_in_word && current != Tone::None && target_tone != Tone::None {
+        return None;
     }
 
     decomp.apply_tone(target_tone, modern_tone);
