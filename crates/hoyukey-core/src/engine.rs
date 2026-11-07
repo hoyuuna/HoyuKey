@@ -920,5 +920,33 @@ mod tests {
         assert_eq!(type_single_word(&mut engine, "thaast"), "thất");
         assert_eq!(type_single_word(&mut engine, "phaast"), "phất");
         assert_eq!(type_single_word(&mut engine, "vieest"), "viết");
+
+        // 7. Kiểm tra Simple Telex (Telex giản lược chuẩn UniKey / OpenKey):
+        // Trong Simple Telex:
+        // - Phím '[' và ']' giữ nguyên là ngoặc vuông code, không biến thành 'ư' / 'ơ'.
+        // - Phím 'w' đứng một mình giữ nguyên là 'w', không tự thành 'ư'.
+        // - Tắt gõ tắt phụ âm + 'w' ('rw' -> 'rw', không thành 'rư').
+        // - Các phím nguyên âm + 'w' ('ow' -> 'ơ', 'aw' -> 'ă', 'uw' -> 'ư', 'uow' -> 'ươ') VẪN HOẠT ĐỘNG HOÀN TOÀN BÌNH THƯỜNG!
+        let mut simple_cfg = TypingConfig::default();
+        simple_cfg.simple_telex = true;
+
+        let type_with_cfg = |engine: &mut Engine, input: &str, cfg: &TypingConfig| -> String {
+            engine.reset();
+            for c in input.chars() {
+                engine.process_char(c, cfg);
+            }
+            engine.current_word.clone()
+        };
+
+        assert_eq!(type_with_cfg(&mut engine, "w", &simple_cfg), "w");
+        assert_eq!(type_with_cfg(&mut engine, "[", &simple_cfg), "[");
+        assert_eq!(type_with_cfg(&mut engine, "]", &simple_cfg), "]");
+        assert_eq!(type_with_cfg(&mut engine, "rw", &simple_cfg), "rw");
+        assert_eq!(type_with_cfg(&mut engine, "ruw", &simple_cfg), "rư");
+        assert_eq!(type_with_cfg(&mut engine, "ow", &simple_cfg), "ơ");
+        assert_eq!(type_with_cfg(&mut engine, "aw", &simple_cfg), "ă");
+        assert_eq!(type_with_cfg(&mut engine, "uw", &simple_cfg), "ư");
+        assert_eq!(type_with_cfg(&mut engine, "uow", &simple_cfg), "ươ");
+        assert_eq!(type_with_cfg(&mut engine, "duwowngf", &simple_cfg), "đường");
     }
 }

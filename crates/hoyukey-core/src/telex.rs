@@ -21,24 +21,26 @@ pub fn transform_telex(
     raw_keys: Option<&str>,
 ) -> Option<String> {
     if word.is_empty() {
-        if key == 'w' || key == 'W' {
-            return Some(if key.is_uppercase() {
-                CHAR_U_HORN_UPPER.to_string()
-            } else {
-                CHAR_U_HORN_LOWER.to_string()
-            });
-        }
-        if key == '[' {
-            return Some(CHAR_U_HORN_LOWER.to_string());
-        }
-        if key == '{' {
-            return Some(CHAR_U_HORN_UPPER.to_string());
-        }
-        if key == ']' {
-            return Some(CHAR_O_HORN_LOWER.to_string());
-        }
-        if key == '}' {
-            return Some(CHAR_O_HORN_UPPER.to_string());
+        if !simple_telex {
+            if key == 'w' || key == 'W' {
+                return Some(if key.is_uppercase() {
+                    CHAR_U_HORN_UPPER.to_string()
+                } else {
+                    CHAR_U_HORN_LOWER.to_string()
+                });
+            }
+            if key == '[' {
+                return Some(CHAR_U_HORN_LOWER.to_string());
+            }
+            if key == '{' {
+                return Some(CHAR_U_HORN_UPPER.to_string());
+            }
+            if key == ']' {
+                return Some(CHAR_O_HORN_LOWER.to_string());
+            }
+            if key == '}' {
+                return Some(CHAR_O_HORN_UPPER.to_string());
+            }
         }
         return None;
     }
@@ -51,8 +53,8 @@ pub fn transform_telex(
     let key_lower = key.to_ascii_lowercase();
     let is_key_upper = key.is_ascii_uppercase();
 
-    // 1. Phím '[' và ']' / '{' và '}' tạo chữ 'ư', 'ơ', 'ươ' (chuẩn UniKey / EVKey)
-    if matches!(key, '[' | ']' | '{' | '}') {
+    // 1. Phím '[' và ']' / '{' và '}' tạo chữ 'ư', 'ơ', 'ươ' (chuẩn UniKey / EVKey - chỉ khi không bật simple_telex)
+    if !simple_telex && matches!(key, '[' | ']' | '{' | '}') {
         if let Some(res) = handle_bracket_keys(word, key) {
             return Some(res);
         }
@@ -314,6 +316,11 @@ fn handle_w_key(
     let mut decomp = decompose_word(word)?;
 
     if decomp.vowels.is_empty() {
+        // Trong Simple Telex: Tắt gõ tắt phụ âm + 'w' ra 'ư' (ví dụ: 'rw' không thành 'rư')
+        if simple_telex {
+            return None;
+        }
+
         // Chuẩn OpenKey (_standaloneWbad và _doubleWAllowed):
         // Chỉ các phụ âm tiếng Việt hợp lệ mới được nhận 'w' thành phụ âm + 'ư' (ví dụ: 'rw' -> 'rư', 'thw' -> 'thư')
         // Tuyệt đối không cho phép 'w', 'ww' nhận 'w' thành 'wư' (tránh gõ 'www' ra 'wư')!
@@ -340,7 +347,7 @@ fn handle_w_key(
 
     // 1. Kiểm tra cặp "oa" -> biến 'a' thành 'ă' (oă: hoẵng, ngoẵng, hoặc, xoăn...)
     // Trong tiếng Việt, 'oa' + 'w' LUÔN LUÔN là 'oă', tuyệt đối không bao giờ là 'ơa'!
-    if !simple_telex && decomp.vowels.len() >= 2 {
+    if decomp.vowels.len() >= 2 {
         for i in 0..(decomp.vowels.len() - 1) {
             if decomp.vowels[i].base == 'o' && decomp.vowels[i + 1].base == 'a' {
                 if decomp.vowels[i + 1].vmod == VowelMod::Breve {
@@ -361,7 +368,7 @@ fn handle_w_key(
     }
 
     // 2. Kiểm tra cặp "uo" -> biến thành "ươ" (hoặc "thuở" nếu bắt đầu bằng "th")
-    if !simple_telex && decomp.vowels.len() >= 2 {
+    if decomp.vowels.len() >= 2 {
         for i in 0..(decomp.vowels.len() - 1) {
             if decomp.vowels[i].base == 'u' && decomp.vowels[i + 1].base == 'o' {
                 let is_thuo = decomp.lead == "th" && decomp.trail.is_empty();
@@ -421,41 +428,37 @@ fn handle_w_key(
     }
 
     // 4. Kiểm tra 'o' -> 'ơ'
-    if !simple_telex {
-        for v in decomp.vowels.iter_mut() {
-            if v.base == 'o' {
-                if v.vmod == VowelMod::Horn {
-                    v.vmod = VowelMod::None;
-                    let base = decomp.recompose();
-                    let append_w = if is_key_upper { 'W' } else { 'w' };
-                    return Some(format!("{}{}", base, append_w));
-                } else if v.vmod == VowelMod::None {
-                    v.vmod = VowelMod::Horn;
-                    if existing_tone != Tone::None {
-                        decomp.apply_tone(existing_tone, modern_tone);
-                    }
-                    return Some(decomp.recompose());
+    for v in decomp.vowels.iter_mut() {
+        if v.base == 'o' {
+            if v.vmod == VowelMod::Horn {
+                v.vmod = VowelMod::None;
+                let base = decomp.recompose();
+                let append_w = if is_key_upper { 'W' } else { 'w' };
+                return Some(format!("{}{}", base, append_w));
+            } else if v.vmod == VowelMod::None {
+                v.vmod = VowelMod::Horn;
+                if existing_tone != Tone::None {
+                    decomp.apply_tone(existing_tone, modern_tone);
                 }
+                return Some(decomp.recompose());
             }
         }
     }
 
     // 5. Kiểm tra 'a' -> 'ă'
-    if !simple_telex {
-        for v in decomp.vowels.iter_mut() {
-            if v.base == 'a' {
-                if v.vmod == VowelMod::Breve {
-                    v.vmod = VowelMod::None;
-                    let base = decomp.recompose();
-                    let append_w = if is_key_upper { 'W' } else { 'w' };
-                    return Some(format!("{}{}", base, append_w));
-                } else if v.vmod == VowelMod::None {
-                    v.vmod = VowelMod::Breve;
-                    if existing_tone != Tone::None {
-                        decomp.apply_tone(existing_tone, modern_tone);
-                    }
-                    return Some(decomp.recompose());
+    for v in decomp.vowels.iter_mut() {
+        if v.base == 'a' {
+            if v.vmod == VowelMod::Breve {
+                v.vmod = VowelMod::None;
+                let base = decomp.recompose();
+                let append_w = if is_key_upper { 'W' } else { 'w' };
+                return Some(format!("{}{}", base, append_w));
+            } else if v.vmod == VowelMod::None {
+                v.vmod = VowelMod::Breve;
+                if existing_tone != Tone::None {
+                    decomp.apply_tone(existing_tone, modern_tone);
                 }
+                return Some(decomp.recompose());
             }
         }
     }
