@@ -35,6 +35,7 @@ pub struct TypedWord {
     pub transformed: bool,
     pub was_line_start: bool,
     pub was_sentence_start: bool,
+    pub spaces_after: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -175,6 +176,19 @@ impl Engine {
                     self.raw_keys = self.current_word.clone();
                 }
             }
+        } else if let Some(last) = self.line_words.last_mut() {
+            // Khi từ hiện tại rỗng và người dùng bấm Backspace xóa khoảng trắng lùi về từ trước:
+            if last.spaces_after > 1 {
+                last.spaces_after -= 1;
+            } else {
+                // Đã xóa hết khoảng trắng phân cách, khôi phục lại từ trước cùng trạng thái gõ!
+                let prev = self.line_words.pop().unwrap();
+                self.current_word = prev.word;
+                self.raw_keys = prev.raw;
+                self.has_transformed = prev.transformed;
+                self.was_at_line_start = prev.was_line_start;
+                self.was_at_sentence_start = prev.was_sentence_start;
+            }
         } else if self.spaces_after_word > 0 {
             self.spaces_after_word -= 1;
             if self.spaces_after_word == 0 {
@@ -214,12 +228,17 @@ impl Engine {
                     transformed: self.has_transformed,
                     was_line_start: self.was_at_line_start,
                     was_sentence_start: self.was_at_sentence_start,
+                    spaces_after: if was_space { 1 } else { 0 },
                 });
                 self.last_word_before_space = Some((
                     self.current_word.clone(),
                     self.raw_keys.clone(),
                     self.has_transformed,
                 ));
+            } else if was_space {
+                if let Some(last) = self.line_words.last_mut() {
+                    last.spaces_after += 1;
+                }
             }
 
             // Ghi nháº­n káº¿t thÃºc cÃ¢u
@@ -847,6 +866,28 @@ mod tests {
         assert_eq!(engine.current_word, "");
         assert_eq!(engine.raw_keys, "");
         assert!(!engine.has_transformed);
+
+        // 4b. Khôi phục từ khi Backspace lùi qua khoảng trắng:
+        // Gõ "gia sa": "gia" + " " + "sa"
+        engine.reset();
+        for c in "gia sa".chars() {
+            engine.process_char(c, &config);
+        }
+        assert_eq!(engine.current_word, "sa");
+        // Backspace xóa 'a' -> "s"
+        engine.handle_backspace(false);
+        assert_eq!(engine.current_word, "s");
+        // Backspace xóa 's' -> ""
+        engine.handle_backspace(false);
+        assert_eq!(engine.current_word, "");
+        // Backspace xóa khoảng trắng -> khôi phục lại "gia"!
+        engine.handle_backspace(false);
+        assert_eq!(engine.current_word, "gia");
+        assert_eq!(engine.raw_keys, "gia");
+        // Gõ 's' thêm dấu cho "gia" -> thành "giá"!
+        let action = engine.process_char('s', &config);
+        assert_eq!(engine.current_word, "giá");
+        assert_eq!(action, KeyAction::Transform { backspaces: 1, text: "á".to_string() });
 
         // 5. Tiếng Anh / Code không bị dính dấu:
         assert_eq!(type_single_word(&mut engine, "user"), "user");
