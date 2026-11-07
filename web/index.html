@@ -80,9 +80,9 @@
     }
 
     .header-inner {
-      max-width: 960px;
+      max-width: 1100px;
       margin: 0 auto;
-      padding: 12px 20px;
+      padding: 14px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -91,13 +91,13 @@
     .logo {
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: 1.05rem;
+      gap: 10px;
+      font-size: 1.15rem;
     }
 
     .logo-img {
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       object-fit: contain;
       border-radius: 8px;
       display: block;
@@ -116,10 +116,10 @@
       align-items: center;
       justify-content: center;
       gap: 8px;
-      padding: 8px 16px;
-      border-radius: 7px;
+      padding: 10px 20px;
+      border-radius: 8px;
       font-weight: 500;
-      font-size: 0.85rem;
+      font-size: 0.9rem;
       cursor: pointer;
       transition: all 0.2s ease;
       border: none;
@@ -150,13 +150,13 @@
     }
 
     .btn-lg {
-      padding: 10px 20px;
-      font-size: 0.875rem;
-      border-radius: 8px;
+      padding: 14px 28px;
+      font-size: 1rem;
+      border-radius: 10px;
     }
 
     .hero {
-      padding: 92px 20px 32px;
+      padding: 140px 24px 80px;
       text-align: center;
       position: relative;
       overflow: hidden;
@@ -168,19 +168,19 @@
       top: 0;
       left: 50%;
       transform: translateX(-50%);
-      width: min(480px, 100vw);
-      height: 300px;
+      width: min(600px, 100vw);
+      height: 400px;
       background: radial-gradient(ellipse, rgba(59, 130, 246, 0.12) 0%, transparent 70%);
       pointer-events: none;
     }
 
     .hero h1 {
-      font-size: clamp(1.75rem, 3.2vw, 2.15rem);
+      font-size: clamp(2.2rem, 5vw, 3.4rem);
       font-weight: 700;
       letter-spacing: -0.03em;
-      line-height: 1.25;
-      margin-bottom: 12px;
-      max-width: 580px;
+      line-height: 1.15;
+      margin-bottom: 18px;
+      max-width: 700px;
       margin-left: auto;
       margin-right: auto;
     }
@@ -193,23 +193,15 @@
     }
 
     .hero p {
-      font-size: 0.925rem;
+      font-size: 1.15rem;
       color: var(--muted-foreground);
-      max-width: 480px;
-      margin: 0 auto 24px;
-      line-height: 1.5;
+      max-width: 520px;
+      margin: 0 auto 36px;
     }
 
-    .hero-actions {
-      display: flex;
-      gap: 10px;
-      justify-content: center;
-      flex-wrap: wrap;
-      margin-bottom: 0;
-    }
-
+    
     .hero-preview-wrapper {
-      margin-top: 22px;
+      margin-top: 36px;
       display: flex;
       justify-content: center;
       perspective: 800px;
@@ -218,7 +210,7 @@
 
     .hero-preview-card {
       position: relative;
-      width: min(180px, 60vw);
+      width: min(200px, 80vw);
       transform-style: preserve-3d;
       transform: rotateX(6deg) rotateY(-8deg) rotateZ(2deg);
       transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.35s ease;
@@ -240,46 +232,52 @@
       outline: none;
     }
 
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 0;
+    }
+
     section {
-      padding: 48px 20px;
+      padding: 80px 24px;
     }
 
     .container {
-      max-width: 960px;
+      max-width: 1100px;
       margin: 0 auto;
     }
 
     .section-header {
       text-align: center;
-      margin-bottom: 32px;
+      margin-bottom: 56px;
     }
 
     .section-header h2 {
-      font-size: 1.45rem;
+      font-size: 1.9rem;
       font-weight: 700;
       letter-spacing: -0.02em;
-      line-height: 1.25;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
     }
 
     .section-header p {
       color: var(--muted-foreground);
-      max-width: 440px;
+      max-width: 480px;
       margin: 0 auto;
-      font-size: 0.875rem;
     }
 
     .features-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
     }
 
     .feature-card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
-      padding: 20px 18px;
+      padding: 28px;
       transition: all 0.25s ease;
     }
 
@@ -290,27 +288,27 @@
     }
 
     .feature-icon {
-      width: 38px;
-      height: 38px;
-      border-radius: 9px;
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin-bottom: 12px;
-      font-size: 1.15rem;
+      margin-bottom: 18px;
+      font-size: 1.3rem;
       background: var(--muted);
     }
 
     .feature-card h3 {
-      font-size: 1rem;
+      font-size: 1.1rem;
       font-weight: 600;
-      margin-bottom: 6px;
+      margin-bottom: 8px;
     }
 
     .feature-card p {
-      font-size: 0.875rem;
+      font-size: 0.925rem;
       color: var(--muted-foreground);
-      line-height: 1.5;
+      line-height: 1.55;
     }
 
     .highlight {
@@ -322,162 +320,159 @@
     .highlight-inner {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 36px;
+      gap: 48px;
       align-items: center;
     }
 
     .highlight-content h2 {
-      font-size: 1.45rem;
+      font-size: 1.9rem;
       font-weight: 700;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
       letter-spacing: -0.02em;
-      line-height: 1.25;
     }
 
     .highlight-content p {
       color: var(--muted-foreground);
-      margin-bottom: 18px;
-      font-size: 0.9rem;
-      line-height: 1.5;
+      margin-bottom: 24px;
+      font-size: 1.05rem;
     }
 
     .ram-badge {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
       background: rgba(34, 197, 94, 0.1);
       border: 1px solid rgba(34, 197, 94, 0.25);
       color: #4ade80;
-      padding: 8px 14px;
-      border-radius: 8px;
+      padding: 12px 20px;
+      border-radius: 10px;
       font-weight: 600;
-      font-size: 0.85rem;
+      font-size: 1.1rem;
     }
 
     .ram-visual {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
-      padding: 24px;
+      padding: 32px;
       text-align: center;
     }
 
     .ram-circle {
-      width: 130px;
-      height: 130px;
+      width: 160px;
+      height: 160px;
       border-radius: 50%;
       background: conic-gradient(#22c55e 0% 8%, #1f1f1f 8% 100%);
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 0 auto 14px;
+      margin: 0 auto 20px;
       position: relative;
     }
 
     .ram-circle::before {
       content: '';
       position: absolute;
-      width: 96px;
-      height: 96px;
+      width: 120px;
+      height: 120px;
       border-radius: 50%;
       background: var(--card);
     }
 
     .ram-circle span {
       position: relative;
-      font-size: 1.5rem;
+      font-size: 1.8rem;
       font-weight: 700;
       color: #4ade80;
     }
 
     .ram-visual p {
       color: var(--muted-foreground);
-      font-size: 0.85rem;
+      font-size: 0.9rem;
     }
 
     .app-features {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
     }
 
     .app-feature {
       display: flex;
       align-items: flex-start;
-      gap: 12px;
+      gap: 14px;
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 16px;
+      padding: 20px;
     }
 
     .app-feature-icon {
-      width: 32px;
-      height: 32px;
-      border-radius: 7px;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
       background: var(--muted);
       display: flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      font-size: 0.95rem;
+      font-size: 1rem;
     }
 
     .app-feature h4 {
-      font-size: 0.9rem;
+      font-size: 0.95rem;
       font-weight: 600;
-      margin-bottom: 3px;
+      margin-bottom: 4px;
     }
 
     .app-feature p {
-      font-size: 0.825rem;
+      font-size: 0.85rem;
       color: var(--muted-foreground);
-      line-height: 1.45;
     }
 
     .cta {
       text-align: center;
-      padding: 64px 20px;
+      padding: 100px 24px;
     }
 
     .cta h2 {
-      font-size: 1.55rem;
+      font-size: 2rem;
       font-weight: 700;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
       letter-spacing: -0.02em;
     }
 
     .cta p {
       color: var(--muted-foreground);
-      margin-bottom: 24px;
-      font-size: 0.9rem;
+      margin-bottom: 32px;
+      font-size: 1.1rem;
     }
 
     .download-box {
       display: inline-flex;
       flex-direction: column;
       align-items: center;
-      gap: 14px;
+      gap: 16px;
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
-      padding: 28px 36px;
+      padding: 36px 48px;
     }
 
     .download-meta {
-      font-size: 0.8rem;
+      font-size: 0.85rem;
       color: var(--muted-foreground);
     }
 
     footer {
       border-top: 1px solid var(--border);
-      padding: 32px 20px;
+      padding: 40px 24px;
       text-align: center;
     }
 
     footer p {
       color: var(--muted-foreground);
-      font-size: 0.825rem;
+      font-size: 0.875rem;
     }
 
     footer a {
@@ -535,7 +530,7 @@
       }
 
       .hero {
-        padding: 84px 16px 20px;
+        padding: 92px 16px 40px;
         overflow: hidden;
       }
 
@@ -574,20 +569,6 @@
         justify-content: center;
         text-align: center;
         box-sizing: border-box;
-      }
-
-      .hero-preview-wrapper {
-        margin-top: 22px;
-        perspective: 800px;
-      }
-
-      .hero-preview-card {
-        width: min(180px, 60vw);
-        transform: rotateX(6deg) rotateY(-8deg) rotateZ(2deg);
-      }
-
-      .hero-preview-card:hover {
-        transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg) translateY(-3px) scale(1.02);
       }
 
       section {
@@ -752,7 +733,6 @@
       </a>
       <a href="#features" class="btn btn-outline btn-lg">Xem tính năng</a>
     </div>
-
     <div class="hero-preview-wrapper">
       <div class="hero-preview-card">
         <img src="https://i.postimg.cc/3RHRD8bc/hodukey.png" alt="Giao diện HoyuKey" class="hero-preview-img" loading="eager" />
