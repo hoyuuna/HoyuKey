@@ -69,6 +69,7 @@ static LAST_FOREGROUND_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static CTRL_IS_DOWN: AtomicBool = AtomicBool::new(false);
 static SHIFT_IS_DOWN: AtomicBool = AtomicBool::new(false);
 static CTRL_SHIFT_READY: AtomicBool = AtomicBool::new(false);
+static OTHER_KEY_OR_MOUSE_PRESSED: AtomicBool = AtomicBool::new(false);
 
 // Theo dÃµi phÃ­m Ä‘ang giá»¯ (auto-repeat) Ä‘á»ƒ tá»‘i Æ°u vÃ  trÃ¡nh ngháº½n luá»“ng phÃ­m Windows
 static LAST_PHYSICAL_VK: AtomicU32 = AtomicU32::new(0);
@@ -231,11 +232,25 @@ pub fn on_focus_window_changed(new_hwnd: HWND) {
     IS_CURRENT_APP_BROWSER.store(is_browser, Ordering::Relaxed);
 
     // Bá» qua chÃ­nh cá»­a sá»• HoyuKey dashboard
-    if app_name == "hoyukey.exe" {
-        return;
-    }
+    // Đổi cửa sổ làm việc: reset ngay trạng thái phím tắt modifier để tránh desync
+    CTRL_IS_DOWN.store(false, Ordering::SeqCst);
+    SHIFT_IS_DOWN.store(false, Ordering::SeqCst);
+    CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
+    OTHER_KEY_OR_MOUSE_PRESSED.store(false, Ordering::SeqCst);
 
-    if !remember_enabled {
+    let is_ignored_app = matches!(
+        app_name.as_str(),
+        "hoyukey.exe"
+            | "explorer.exe"
+            | "shellexperiencehost.exe"
+            | "searchhost.exe"
+            | "startmenuexperiencehost.exe"
+            | "taskmgr.exe"
+            | "lockapp.exe"
+            | "systemsettings.exe"
+            | "applicationframehost.exe"
+    );
+    if is_ignored_app || !remember_enabled {
         return;
     }
 
@@ -280,7 +295,19 @@ pub fn record_current_app_mode(new_enabled: bool) {
     unsafe {
         let fg = GetForegroundWindow();
         if let Some(app_name) = get_process_name_by_hwnd(fg) {
-            if app_name != "hoyukey.exe" {
+            let is_ignored_app = matches!(
+                app_name.as_str(),
+                "hoyukey.exe"
+                    | "explorer.exe"
+                    | "shellexperiencehost.exe"
+                    | "searchhost.exe"
+                    | "startmenuexperiencehost.exe"
+                    | "taskmgr.exe"
+                    | "lockapp.exe"
+                    | "systemsettings.exe"
+                    | "applicationframehost.exe"
+            );
+            if !is_ignored_app {
                 let mut map_lock = APP_INPUT_STATES.lock().unwrap();
                 let map = map_lock.get_or_insert_with(HashMap::new);
                 map.insert(app_name, new_enabled);
@@ -295,6 +322,9 @@ unsafe extern "system" fn low_level_mouse_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if code >= 0 {
+        OTHER_KEY_OR_MOUSE_PRESSED.store(true, Ordering::SeqCst);
+        CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
+
         let msg = wparam as u32;
         if msg == WM_LBUTTONUP || msg == WM_RBUTTONUP {
             // Khi nháº£ chuá»™t: con trá» Ä‘Ã£ Ä‘Ã¡p xuá»‘ng vá»‹ trÃ­ má»›i -> yÃªu cáº§u náº¡p ná»n tá»« táº¡i con trá»
@@ -358,18 +388,27 @@ unsafe extern "system" fn low_level_keyboard_proc(
             };
             let is_shortcut_allowed = switch_key_enabled && (!pause_shortcut || !is_foreground_paused_app(&pause_shortcut_apps));
             if switch_key == SwitchKey::CtrlShift {
+                let is_pure_ctrl_shift = !OTHER_KEY_OR_MOUSE_PRESSED.load(Ordering::SeqCst);
                 if is_ctrl_key {
                     CTRL_IS_DOWN.store(false, Ordering::SeqCst);
-                    if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) && is_shortcut_allowed {
+                    if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) && is_pure_ctrl_shift && is_shortcut_allowed {
                         toggle_vietnamese_mode();
                     }
                 } else if is_shift_key {
                     SHIFT_IS_DOWN.store(false, Ordering::SeqCst);
-                    if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) && is_shortcut_allowed {
+                    if CTRL_SHIFT_READY.swap(false, Ordering::SeqCst) && is_pure_ctrl_shift && is_shortcut_allowed {
                         toggle_vietnamese_mode();
                     }
                 }
             }
+
+            if !CTRL_IS_DOWN.load(Ordering::SeqCst) && !SHIFT_IS_DOWN.load(Ordering::SeqCst) {
+                OTHER_KEY_OR_MOUSE_PRESSED.store(false, Ordering::SeqCst);
+                CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
+            }
+        } else {
+            OTHER_KEY_OR_MOUSE_PRESSED.store(true, Ordering::SeqCst);
+            CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
         }
 
         // Cháº·n KeyUp náº¿u KeyDown tÆ°Æ¡ng á»©ng Ä‘Ã£ bá»‹ bá»™ gÃµ cháº·n (trÃ¡nh desync trÃªn Chrome/Edge)
@@ -381,6 +420,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
     if !is_down {
         return CallNextHookEx(null_mut(), code, wparam, lparam);
+    }
+
+    if !is_ctrl_key && !is_shift_key {
+        OTHER_KEY_OR_MOUSE_PRESSED.store(true, Ordering::SeqCst);
+        CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
     }
 
     // Báº¥t ká»³ phÃ­m váº­t lÃ½ nÃ o Ä‘Æ°á»£c báº¥m cÅ©ng láº­p tá»©c há»§y bá» cÃ¡c tÃ¡c vá»¥ CÃ¡ch 2 Ä‘ang chá» (náº¿u cÃ³)
@@ -424,18 +468,19 @@ unsafe extern "system" fn low_level_keyboard_proc(
         if is_shortcut_allowed {
             match switch_key {
                 SwitchKey::CtrlShift => {
+                    let other_pressed = OTHER_KEY_OR_MOUSE_PRESSED.load(Ordering::SeqCst);
                     if is_ctrl_key {
                         CTRL_IS_DOWN.store(true, Ordering::SeqCst);
-                        if SHIFT_IS_DOWN.load(Ordering::SeqCst) {
+                        if SHIFT_IS_DOWN.load(Ordering::SeqCst) && !other_pressed {
                             CTRL_SHIFT_READY.store(true, Ordering::SeqCst);
                         }
                     } else if is_shift_key {
                         SHIFT_IS_DOWN.store(true, Ordering::SeqCst);
-                        if CTRL_IS_DOWN.load(Ordering::SeqCst) {
+                        if CTRL_IS_DOWN.load(Ordering::SeqCst) && !other_pressed {
                             CTRL_SHIFT_READY.store(true, Ordering::SeqCst);
                         }
                     } else {
-                        // PhÃ­m thá»© 3 Ä‘Æ°á»£c nháº¥n -> há»§y chuyá»ƒn cháº¿ Ä‘á»™
+                        OTHER_KEY_OR_MOUSE_PRESSED.store(true, Ordering::SeqCst);
                         CTRL_SHIFT_READY.store(false, Ordering::SeqCst);
                     }
                 }
