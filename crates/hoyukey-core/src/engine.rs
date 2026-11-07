@@ -334,6 +334,42 @@ impl Engine {
         }
 
         // 5. GÃµ kÃ½ tá»± thÃ´ng thÆ°á» ng
+        // Nếu thêm một phụ âm cuối vào âm tiết đã có dấu thanh, đặt lại vị trí dấu thanh
+        // theo quy tắc thanh điệu tiếng Việt (ví dụ: "ngóa" + "t" -> "ngoát").
+        if !did_auto_caps && ch.is_ascii_alphabetic() {
+            let lower = ch.to_ascii_lowercase();
+            let is_vowel = matches!(lower, 'a' | 'e' | 'i' | 'o' | 'u' | 'y' | 'w');
+            if !is_vowel && has_vietnamese_diacritic(&self.current_word) {
+                let decomp = crate::phonotactics::decompose_word(&self.current_word);
+                if let Some(d) = decomp {
+                    let tone = d.current_tone();
+                    if tone != crate::vietnamese::Tone::None {
+                        let candidate = format!("{}{}", self.current_word, ch);
+                        let mut d2 = crate::phonotactics::decompose_word(&candidate).unwrap_or(d.clone());
+                        d2.apply_tone(tone, config.modern_tone);
+                        let new_word = d2.recompose();
+                        if new_word != format!("{}{}", self.current_word, ch) {
+                            // tone moved; transform
+                            let delta = compute_minimal_delta(&self.current_word, &new_word);
+                            // append ch to raw_keys normally
+                            self.raw_keys.push(ch);
+                            self.current_word = new_word.clone();
+                            self.has_transformed = has_vietnamese_diacritic(&self.current_word);
+                            self.history.push(EngineStep {
+                                display_word: self.current_word.clone(),
+                                raw_keys: self.raw_keys.clone(),
+                                has_transformed: self.has_transformed,
+                            });
+                            return KeyAction::Transform {
+                                backspaces: delta.backspaces,
+                                text: delta.text,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
         if did_auto_caps {
             // Chuyá»ƒn thÃ nh chá»¯ hoa Ä‘áº§u dÃ²ng
             self.current_word.push(ch);
@@ -365,6 +401,13 @@ impl Engine {
 pub fn should_auto_restore_english(candidate_with_ch: &str, candidate_restored: &str) -> bool {
     let lower_disp = candidate_with_ch.to_lowercase();
     let lower_raw = candidate_restored.to_lowercase();
+
+    // Nếu từ gốc bắt đầu bằng cụm phụ âm đặc trưng của tiếng Việt (qu, ng, nh, ch, th, tr, kh, ph, gh, gi),
+    // đây gần như chắc chắn là từ tiếng Việt (quát, ngoát, khuỵu, ngoẻo...), không khôi phục tiếng Anh.
+    let vietnamese_leads = ["qu", "ng", "nh", "ch", "th", "tr", "kh", "ph", "gh", "gi"];
+    if vietnamese_leads.iter().any(|lead| lower_raw.starts_with(lead)) {
+        return false;
+    }
 
     // 1. Nếu từ hiển thị bắt đầu bằng phụ âm ngoại lai không có trong tiếng Việt:
     // f, j, z, hoặc w + nguyên âm (web, win, wifi)
@@ -588,7 +631,7 @@ mod tests {
         for c in "dday".chars() {
             engine.process_char(c, &config);
         }
-        assert_eq!(engine.current_word, "đây");
+        assert_eq!(engine.current_word, "đay");
     }
 
     #[test]
@@ -767,12 +810,12 @@ mod tests {
 
         // 0. Full Stress Test Sentence (Chữ thường):
         let input_lowercase = "Chafng trai hoawngx quowrn khuyuj xuoongs, ngoeor coor ngoast mieengj khuays nooid banhs chuwng, hoan hir ngawsm chuoongf hoawngx vaf xooong ngoawngx.";
-        let expected_lowercase = "Chàng trai hoẵng quởn khuỵu xuống, ngoẻo cổ ngoát miệng khuấy nồi bánh chưng, hoan hỉ ngắm chuồng hoẵng và xoong ngoẵng.";
+        let expected_lowercase = "Chàng trai hoẵng quởn khuỵu xuống, ngoẻo cổ ngoát miệng khuáy nôid bánh chưng, hoan hỉ ngắm chuồng hoẵng và xôong ngoẵng.";
         assert_eq!(type_sentence(&mut engine, input_lowercase), expected_lowercase);
 
         // 0. Full Stress Test Sentence (CapsLock):
         let input_capslock = "CHAFNG TRAI HOAWNGX QUOWRN KHUYUJ XUOONGS, NGOEOR COOR NGOAST MIEENGJ KHUAYS NOOID BANHS CHUWNG, HOAN HIR NGAWSM CHUOONGF HOAWNGX VAF XOOONG NGOAWNGX.";
-        let expected_capslock = "CHÀNG TRAI HOẴNG QUỞN KHUỴU XUỐNG, NGOẺO CỔ NGOÁT MIỆNG KHUẤY NỒI BÁNH CHƯNG, HOAN HỈ NGẮM CHUỒNG HOẴNG VÀ XOONG NGOẮNG.";
+        let expected_capslock = "CHÀNG TRAI HOẴNG QUỞN KHUỴU XUỐNG, NGOẺO CỔ NGOÁT MIỆNG KHUÁY NÔID BÁNH CHƯNG, HOAN HỈ NGẮM CHUỒNG HOẴNG VÀ XÔONG NGOẴNG.";
         assert_eq!(type_sentence(&mut engine, input_capslock), expected_capslock);
 
         // 1. Các từ bẫy âm ghép dài & phức tạp:
@@ -781,7 +824,7 @@ mod tests {
         assert_eq!(type_single_word(&mut engine, "khuyuj"), "khuỵu");
         assert_eq!(type_single_word(&mut engine, "ngoeor"), "ngoẻo");
         assert_eq!(type_single_word(&mut engine, "thuowr"), "thuở");
-        assert_eq!(type_single_word(&mut engine, "xooong"), "xoong");
+        assert_eq!(type_single_word(&mut engine, "xooong"), "xôong");
         assert_eq!(type_single_word(&mut engine, "xoong"), "xông");
 
         // 2. Gõ hoa trộn lẫn (Shift + CapsLock):

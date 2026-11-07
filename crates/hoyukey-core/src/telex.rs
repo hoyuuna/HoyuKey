@@ -222,6 +222,16 @@ fn handle_hat_key(word: &str, key: char, is_key_upper: bool, free_marking: bool)
         return None;
     }
 
+    // Trong âm tiết mở (không có phụ âm cuối), phím mũ chỉ biến đổi khi gõ lặp lại
+    // ngay sau nguyên âm cùng loại (ví dụ: "oo" -> "ô", "aa" -> "ă", "ee" -> "ê").
+    // Nếu không, ký tự được gõ thêm bình thường (ví dụ: "ngoe" + "o" -> "ngoeo").
+    if decomp.trail.is_empty() {
+        let last_char = word.chars().last().unwrap_or(' ').to_ascii_lowercase();
+        if last_char != key {
+            return None;
+        }
+    }
+
     let mut target_idx = None;
     for (i, v) in decomp.vowels.iter().enumerate() {
         if v.base == key {

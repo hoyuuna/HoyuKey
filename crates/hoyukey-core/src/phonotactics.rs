@@ -208,7 +208,7 @@ pub fn select_tone_vowel_index(vowels: &[VowelPart], has_trail: bool, modern_ton
 
         // CÃ¡c cáº·p oa, oe, uy:
         if (v0 == 'o' && (v1 == 'a' || v1 == 'e')) || (v0 == 'u' && v1 == 'y') {
-            return if modern_tone { 1 } else { 0 }; // Chuáº©n má»›i: hÃ³a, hÃ²e, thÃºy; Chuáº©n cÅ©: hoÃ¡, hoÃ¨, thuÃ½
+            return if modern_tone { 0 } else { 1 }; // Chuáº©n má»›i: hÃ³a, hÃ²e, thÃºy; Chuáº©n cÅ©: hoÃ¡, hoÃ¨, thuÃ½
         }
 
         // CÃ¡c cáº·p cÃ³ bÃ¡n Ã¢m cuá»‘i (ai, ao, au, ay, eo, eu, oi, ui): dáº¥u luÃ´n á»Ÿ nguyÃªn Ã¢m thá»© nháº¥t (mÃ¡i, bÃ¡o, sÃ¡u, chÃ¨o, ngá»“i, tÃºi)
@@ -294,7 +294,7 @@ pub fn has_invalid_coda_consonants(word: &str) -> bool {
 pub fn is_english_foreign_word(word: &str) -> bool {
     let lower = word.to_lowercase();
     let chars: Vec<char> = lower.chars().collect();
-    if chars.is_empty() {
+    if chars.is_empty() || chars.len() < 3 {
         return false;
     }
 
