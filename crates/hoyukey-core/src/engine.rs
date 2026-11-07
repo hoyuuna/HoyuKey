@@ -352,29 +352,23 @@ impl Engine {
             }
         }
 
-        // 5. GÃµ kÃ½ tá»± thÃ´ng thÆ°á» ng
+        // 5. Gõ ký tự thông thường
+        self.current_word.push(ch);
+        self.raw_keys.push(ch);
+        let has_trans = has_vietnamese_diacritic(&self.current_word);
+        self.has_transformed = has_trans;
+        self.history.push(EngineStep {
+            display_word: self.current_word.clone(),
+            raw_keys: self.raw_keys.clone(),
+            has_transformed: has_trans,
+        });
+
         if did_auto_caps {
-            // Chuyá»ƒn thÃ nh chá»¯ hoa Ä‘áº§u dÃ²ng
-            self.current_word.push(ch);
-            self.raw_keys.push(ch);
-            self.history.push(EngineStep {
-                display_word: self.current_word.clone(),
-                raw_keys: self.raw_keys.clone(),
-                has_transformed: false,
-            });
             return KeyAction::Transform {
                 backspaces: 0,
                 text: ch.to_string(),
             };
         }
-
-        self.current_word.push(ch);
-        self.raw_keys.push(ch);
-        self.history.push(EngineStep {
-            display_word: self.current_word.clone(),
-            raw_keys: self.raw_keys.clone(),
-            has_transformed: false,
-        });
 
         KeyAction::PassThrough
     }
@@ -384,6 +378,14 @@ impl Engine {
 pub fn should_auto_restore_english(candidate_with_ch: &str, candidate_restored: &str) -> bool {
     let lower_disp = candidate_with_ch.to_lowercase();
     let lower_raw = candidate_restored.to_lowercase();
+
+    // 0. NGUYÊN TẮC VÀNG (Chuẩn UniKey, OpenKey, BambooCore):
+    // Nếu từ hiển thị là một từ/âm tiết tiếng Việt hợp lệ, TUYỆT ĐỐI KHÔNG KHÔI PHỤC!
+    // Các từ như 'xuất' (gõ xuaast), 'biết' (bieest), 'tiết' (tieest), 'bất' (baast), 'cất' (caast)...
+    // là tiếng Việt 100% chuẩn ngữ âm học. Không bộ gõ nào lại khôi phục từ tiếng Việt hợp lệ!
+    if is_valid_vietnamese_syllable(&lower_disp) {
+        return false;
+    }
 
     // 1. Nếu từ hiển thị bắt đầu bằng phụ âm ngoại lai không có trong tiếng Việt:
     // f, j, z, hoặc w + nguyên âm (web, win, wifi)
@@ -406,27 +408,35 @@ pub fn should_auto_restore_english(candidate_with_ch: &str, candidate_restored: 
         return true;
     }
 
-    // 3. Nếu chuỗi phím gốc (raw) hoặc từ hiển thị kết thúc bằng cụm phụ âm/hậu tố tiếng Anh đặc trưng:
+    // 3. Nếu từ hiển thị kết thúc bằng cụm phụ âm/hậu tố tiếng Anh đặc trưng:
+    // LƯU Ý QUAN TRỌNG: Chỉ kiểm tra trên lower_disp (từ hiển thị), TUYỆT ĐỐI KHÔNG kiểm tra trên lower_raw!
+    // Vì khi gõ Telex, phím dấu 's', 'r', 'f'... nằm trước phụ âm cuối (như xuaast, bieest, tieest)
+    // sẽ làm lower_raw kết thúc bằng 'st', 'rt', 'ft', nhưng từ hiển thị là 'xuất', 'biết', 'tiết' (kết thúc bằng 't')!
     let english_ending_clusters = [
         "st", "sk", "sp", "ft", "ct", "pt", "lt", "mp", "nd", "nk", "nt",
         "rk", "rd", "rm", "rn", "rp", "rs", "tch", "ts", "ff", "ss", "ll", "ck", "sh",
         "er", "re", "ce", "se", "ty", "ly", "ry", "al", "ment",
     ];
     for &cluster in &english_ending_clusters {
-        if lower_raw.ends_with(cluster) || lower_disp.ends_with(cluster) {
+        if lower_disp.ends_with(cluster) {
             return true;
         }
     }
 
-    // 4. Nếu chuỗi phím gốc hoặc từ hiển thị bắt đầu bằng cụm phụ âm tiếng Anh đặc trưng:
+    // 4. Nếu từ hiển thị hoặc phím gốc bắt đầu bằng cụm phụ âm tiếng Anh đặc trưng:
     let english_starting_clusters = [
         "str", "spr", "spl", "scr", "br", "cr", "dr", "fr", "gr", "pr",
         "cl", "fl", "gl", "pl", "sl", "sc", "sk", "sm", "sn", "sp", "st", "sw", "tw", "wr",
     ];
     for &cluster in &english_starting_clusters {
-        if lower_raw.starts_with(cluster) || lower_disp.starts_with(cluster) {
+        if lower_disp.starts_with(cluster) || lower_raw.starts_with(cluster) {
             return true;
         }
+    }
+
+    // 5. Nếu từ hiển thị không phải là âm tiết tiếng Việt hợp lệ:
+    if !is_valid_vietnamese_phonotactics(&lower_disp) {
+        return true;
     }
 
     false
@@ -894,5 +904,18 @@ mod tests {
         assert_eq!(type_single_word(&mut engine, "process"), "process");
         assert_eq!(type_single_word(&mut engine, "commit"), "commit");
         assert_eq!(type_single_word(&mut engine, "install"), "install");
+
+        // 6. Gõ dấu thanh trước phụ âm cuối (như xuaast -> xuất, bieest -> biết, baast -> bất):
+        // Tuyệt đối không được kích hoạt nhầm auto-restore 'st' thành chuỗi thô tiếng Anh!
+        assert_eq!(type_single_word(&mut engine, "xuaast"), "xuất");
+        assert_eq!(type_single_word(&mut engine, "bieest"), "biết");
+        assert_eq!(type_single_word(&mut engine, "tieest"), "tiết");
+        assert_eq!(type_single_word(&mut engine, "baast"), "bất");
+        assert_eq!(type_single_word(&mut engine, "caast"), "cất");
+        assert_eq!(type_single_word(&mut engine, "maast"), "mất");
+        assert_eq!(type_single_word(&mut engine, "nhaast"), "nhất");
+        assert_eq!(type_single_word(&mut engine, "thaast"), "thất");
+        assert_eq!(type_single_word(&mut engine, "phaast"), "phất");
+        assert_eq!(type_single_word(&mut engine, "vieest"), "viết");
     }
 }

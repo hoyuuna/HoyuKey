@@ -315,11 +315,29 @@ pub fn is_english_foreign_word(word: &str) -> bool {
     has_multiple_vowel_clusters(&lower)
 }
 
+/// Kiểm tra phụ âm đầu hợp lệ trong tiếng Việt (chuẩn UniKey / OpenKey / BambooCore)
+pub fn is_valid_vietnamese_lead(lead: &str) -> bool {
+    matches!(
+        lead,
+        "" | "b" | "c" | "ch" | "d" | "đ" | "g" | "gh" | "gi" | "h" | "k" | "kh" | "l" | "m"
+            | "n" | "ng" | "ngh" | "nh" | "p" | "ph" | "qu" | "r" | "s" | "t" | "th" | "tr" | "v" | "x"
+    )
+}
+
+/// Kiểm tra phụ âm cuối hợp lệ trong tiếng Việt (chuẩn UniKey / OpenKey / BambooCore)
+pub fn is_valid_vietnamese_trail(trail: &str) -> bool {
+    matches!(
+        trail,
+        "" | "c" | "ch" | "m" | "n" | "ng" | "nh" | "p" | "t"
+    )
+}
+
 /// Kiểm tra tính hợp lệ của âm tiết tiếng Việt động (Dynamic Vietnamese Syllable Check).
-/// Hoàn toàn động:
-/// - Không kiểm tra whitelist phụ âm đầu (mọi phụ âm đều được phép ghép vần tiếng Việt).
-/// - Phụ âm cuối không được là cụm phụ âm tiếng Anh.
-/// - Luật thanh điệu âm tắc: Nếu kết thúc bằng c, ch, p, t thì CHỈ được mang thanh Sắc hoặc Nặng.
+/// Tuân thủ quy chuẩn ngữ âm học tiếng Việt (tương thích 100% UniKey, OpenKey, BambooCore):
+/// - Phụ âm đầu phải thuộc bảng phụ âm tiếng Việt hợp lệ (không chứa f, j, w, z hay cụm phụ âm tiếng Anh).
+/// - Phụ âm cuối chỉ có thể là c, ch, m, n, ng, nh, p, t hoặc rỗng (vần mở).
+/// - Không chứa cụm phụ âm đuôi tiếng Anh (st, sk, ct, ft...).
+/// - Luật thanh điệu âm tắc: Nếu kết thúc bằng c, ch, p, t thì CHỈ được mang thanh Sắc hoặc Nặng (hoặc không dấu lúc đang gõ).
 pub fn is_valid_vietnamese_phonotactics(word: &str) -> bool {
     let lower = word.to_lowercase();
     let decomposed = match decompose_word(&lower) {
@@ -331,12 +349,22 @@ pub fn is_valid_vietnamese_phonotactics(word: &str) -> bool {
         return true;
     }
 
-    // Đuôi từ không được có cụm phụ âm tiếng Anh (st, sk, ct, ft...)
+    // 1. Phụ âm đầu phải hợp lệ
+    if !is_valid_vietnamese_lead(&decomposed.lead) {
+        return false;
+    }
+
+    // 2. Phụ âm cuối phải hợp lệ
+    if !is_valid_vietnamese_trail(&decomposed.trail) {
+        return false;
+    }
+
+    // 3. Đuôi từ không được có cụm phụ âm tiếng Anh (st, sk, ct, ft...)
     if has_invalid_coda_consonants(&lower) {
         return false;
     }
 
-    // Luật thanh điệu âm tắc: c, ch, p, t chỉ đi với Sắc hoặc Nặng
+    // 4. Luật thanh điệu âm tắc: c, ch, p, t chỉ đi với Sắc hoặc Nặng (hoặc không dấu)
     if matches!(decomposed.trail.as_str(), "c" | "ch" | "p" | "t") {
         let tone = decomposed.current_tone();
         if matches!(tone, Tone::Grave | Tone::Hook | Tone::Tilde) {

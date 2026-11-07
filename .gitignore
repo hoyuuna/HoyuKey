@@ -1,4 +1,6 @@
 /target
 /dist
+/temp
+temp/
 *.exe
 *.pdb
