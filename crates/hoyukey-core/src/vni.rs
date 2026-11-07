@@ -26,11 +26,11 @@ pub fn transform_vni(
             handle_vni_tone(word, key, modern_tone, free_marking)
         }
         // 6: Dấu mũ (â, ê, ô)
-        '6' => handle_vni_hat(word, free_marking),
+        '6' => handle_vni_hat(word, free_marking, modern_tone),
         // 7: Dấu móc (ơ, ư)
-        '7' => handle_vni_horn(word, free_marking),
+        '7' => handle_vni_horn(word, free_marking, modern_tone),
         // 8: Dấu trăng (ă)
-        '8' => handle_vni_breve(word, free_marking),
+        '8' => handle_vni_breve(word, free_marking, modern_tone),
         // 9: Dấu gạch đ/Đ
         '9' => handle_vni_stroke(word, free_marking),
         _ => None,
@@ -78,7 +78,7 @@ fn handle_vni_tone(word: &str, key: char, modern_tone: bool, free_marking: bool)
     Some(new_word)
 }
 
-fn handle_vni_hat(word: &str, free_marking: bool) -> Option<String> {
+fn handle_vni_hat(word: &str, free_marking: bool, modern_tone: bool) -> Option<String> {
     let mut decomp = decompose_word(word)?;
     if decomp.vowels.is_empty() {
         return None;
@@ -87,6 +87,8 @@ fn handle_vni_hat(word: &str, free_marking: bool) -> Option<String> {
     if !free_marking && !decomp.trail.is_empty() {
         return None;
     }
+
+    let existing_tone = decomp.current_tone();
 
     // Tìm a, e, o
     for v in decomp.vowels.iter_mut() {
@@ -97,6 +99,9 @@ fn handle_vni_hat(word: &str, free_marking: bool) -> Option<String> {
                 return Some(format!("{}6", base));
             } else if v.vmod == VowelMod::None {
                 v.vmod = VowelMod::Hat;
+                if existing_tone != Tone::None {
+                    decomp.apply_tone(existing_tone, modern_tone);
+                }
                 return Some(decomp.recompose());
             }
         }
@@ -105,7 +110,7 @@ fn handle_vni_hat(word: &str, free_marking: bool) -> Option<String> {
     None
 }
 
-fn handle_vni_horn(word: &str, free_marking: bool) -> Option<String> {
+fn handle_vni_horn(word: &str, free_marking: bool, modern_tone: bool) -> Option<String> {
     let mut decomp = decompose_word(word)?;
     if decomp.vowels.is_empty() {
         return None;
@@ -114,6 +119,8 @@ fn handle_vni_horn(word: &str, free_marking: bool) -> Option<String> {
     if !free_marking && !decomp.trail.is_empty() {
         return None;
     }
+
+    let existing_tone = decomp.current_tone();
 
     // Kiểm tra cặp uo -> ươ
     if decomp.vowels.len() >= 2 {
@@ -127,6 +134,9 @@ fn handle_vni_horn(word: &str, free_marking: bool) -> Option<String> {
                 } else {
                     decomp.vowels[i].vmod = VowelMod::Horn;
                     decomp.vowels[i + 1].vmod = VowelMod::Horn;
+                    if existing_tone != Tone::None {
+                        decomp.apply_tone(existing_tone, modern_tone);
+                    }
                     return Some(decomp.recompose());
                 }
             }
@@ -142,6 +152,9 @@ fn handle_vni_horn(word: &str, free_marking: bool) -> Option<String> {
                 return Some(format!("{}7", base));
             } else if v.vmod == VowelMod::None {
                 v.vmod = VowelMod::Horn;
+                if existing_tone != Tone::None {
+                    decomp.apply_tone(existing_tone, modern_tone);
+                }
                 return Some(decomp.recompose());
             }
         }
@@ -150,7 +163,7 @@ fn handle_vni_horn(word: &str, free_marking: bool) -> Option<String> {
     None
 }
 
-fn handle_vni_breve(word: &str, free_marking: bool) -> Option<String> {
+fn handle_vni_breve(word: &str, free_marking: bool, modern_tone: bool) -> Option<String> {
     let mut decomp = decompose_word(word)?;
     if decomp.vowels.is_empty() {
         return None;
@@ -160,6 +173,8 @@ fn handle_vni_breve(word: &str, free_marking: bool) -> Option<String> {
         return None;
     }
 
+    let existing_tone = decomp.current_tone();
+
     for v in decomp.vowels.iter_mut() {
         if v.base == 'a' {
             if v.vmod == VowelMod::Breve {
@@ -168,6 +183,9 @@ fn handle_vni_breve(word: &str, free_marking: bool) -> Option<String> {
                 return Some(format!("{}8", base));
             } else if v.vmod == VowelMod::None {
                 v.vmod = VowelMod::Breve;
+                if existing_tone != Tone::None {
+                    decomp.apply_tone(existing_tone, modern_tone);
+                }
                 return Some(decomp.recompose());
             }
         }

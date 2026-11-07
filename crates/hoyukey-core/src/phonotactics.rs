@@ -174,56 +174,58 @@ pub fn decompose_word(word: &str) -> Option<DecomposedSyllable> {
     })
 }
 
-/// Thuáº­t toÃ¡n xÃ¡c Ä‘á»‹nh nguyÃªn Ã¢m chÃ­nh mang dáº¥u thanh theo quy luáº­t ngá»¯ Ã¢m há» c tiáº¿ng Viá»‡t.
-/// KhÃ´ng dÃ¹ng tá»« Ä‘iá»ƒn, suy luáº­n toÃ¡n há» c tuyá»‡t Ä‘á»‘i.
+/// Thuật toán xác định nguyên âm chính mang dấu thanh theo quy luật ngữ âm học tiếng Việt.
+/// Khác biệt hoàn toàn so với việc đoán mò, tuân thủ 100% ngữ âm học (UniKey / OpenKey / BambooCore):
 pub fn select_tone_vowel_index(vowels: &[VowelPart], has_trail: bool, modern_tone: bool) -> usize {
     let len = vowels.len();
     if len <= 1 {
         return 0;
     }
 
-    // Náº¿u cÃ³ 1 nguyÃªn Ã¢m Ä‘Ã£ mang mÅ©/mÃ³c (Ã¢, Äƒ, Ãª, Ã´, Æ¡, Æ°), nguyÃªn Ã¢m Ä‘Ã³ luÃ´n lÃ  Ã¢m chÃ­nh mang dáº¥u thanh!
-    let mut marked_vowel = None;
+    // 1. NGUYÊN TẮC BẤT DI BẤT DỊCH (UniKey, OpenKey, BambooCore):
+    // Nếu trong cụm nguyên âm có nguyên âm mang mũ (â, ê, ô) hoặc trăng (ă):
+    // Nguyên âm đó 100% LUÔN LÀ ÂM CHÍNH MANG DẤU THANH (xuất, thuế, biết, cuốn, xoắt, quất...)!
     for (idx, v) in vowels.iter().enumerate() {
-        if v.vmod != VowelMod::None {
-            marked_vowel = Some(idx);
+        if matches!(v.vmod, VowelMod::Hat | VowelMod::Breve) {
+            return idx;
         }
     }
 
-    if len == 2 {
-        if has_trail {
-            // CÃ³ phá»¥ Ã¢m cuá»‘i (toÃ¡n, tiáº¿ng, buá»“n, hoÃ ng, xuá»‘ng):
-            // Dáº¥u luÃ´n Ä‘áº·t á»Ÿ nguyÃªn Ã¢m thá»© 2!
-            return 1;
-        }
+    // 2. Nếu có ươ (cả 2 nguyên âm đều mang móc horn):
+    // Dấu luôn ở 'ơ' (nguyên âm thứ 2: mượn, đường, nước, rước, cười, người).
+    if len >= 2 && vowels[0].vmod == VowelMod::Horn && vowels[1].vmod == VowelMod::Horn {
+        return 1;
+    }
 
-        // KhÃ´ng cÃ³ phá»¥ Ã¢m cuá»‘i (Ã¢m tiáº¿t má»Ÿ):
+    // 3. Nếu có âm cuối: dấu luôn nằm ở nguyên âm cuối của cụm (toán, hoàng, muộn...)
+    if has_trail {
+        return len - 1;
+    }
+
+    // 4. Không có âm cuối (âm tiết mở):
+    if len == 2 {
         let v0 = vowels[0].base;
         let v1 = vowels[1].base;
 
-        // CÃ¡c cáº·p nguyÃªn Ã¢m Ä‘Ã´i má»Ÿ ia, ua, Æ°a: dáº¥u luÃ´n á»Ÿ nguyÃªn Ã¢m thá»© nháº¥t (mÃ­a, mÃºa, má»©a, kÃ¬a, chÃ¹a)
+        // Các cặp nguyên âm đôi mở thuần túy ia, ua, ưa (không có mũ):
+        // Dấu luôn ở nguyên âm thứ nhất (mía, múa, mứa, kìa, chùa)
         if (v0 == 'i' && v1 == 'a') || (v0 == 'u' && v1 == 'a') || (v0 == 'u' && vowels[0].vmod == VowelMod::Horn && v1 == 'a') {
             return 0;
         }
 
-        // CÃ¡c cáº·p oa, oe, uy:
+        // Các cặp oa, oe, uy:
         if (v0 == 'o' && (v1 == 'a' || v1 == 'e')) || (v0 == 'u' && v1 == 'y') {
-            return if modern_tone { 1 } else { 0 }; // Chuáº©n má»›i: hÃ³a, hÃ²e, thÃºy; Chuáº©n cÅ©: hoÃ¡, hoÃ¨, thuÃ½
+            return if modern_tone { 1 } else { 0 }; // Chuẩn mới: hóa, hòe, thúy; Chuẩn cũ: hoá, hoè, thuý
         }
 
-        // CÃ¡c cáº·p cÃ³ bÃ¡n Ã¢m cuá»‘i (ai, ao, au, ay, eo, eu, oi, ui): dáº¥u luÃ´n á»Ÿ nguyÃªn Ã¢m thá»© nháº¥t (mÃ¡i, bÃ¡o, sÃ¡u, chÃ¨o, ngá»“i, tÃºi)
-        if let Some(idx) = marked_vowel {
-            return idx;
-        }
+        // Các cặp có bán âm cuối (ai, ao, au, ay, eo, eu, oi, ui):
+        // Dấu luôn ở nguyên âm thứ nhất (mái, báo, sáu, chèo, ngồi, túi)
         return 0;
     }
 
     if len >= 3 {
-        // CÃ¡c cá»¥m 3 nguyÃªn Ã¢m (oai, oay, uay, uÃ´i, Æ°Æ¡i, Æ°Æ¡u, uyÃª):
-        if let Some(idx) = marked_vowel {
-            return idx;
-        }
-        // Máº·c Ä‘á»‹nh nguyÃªn Ã¢m á»Ÿ giá»¯a lÃ  Ã¢m chÃ­nh (thoÃ¡i, xoay, khuáº¥y, khuá»·u)
+        // Cụm 3 nguyên âm mở (oai, oay, uay, uôi, ươi, ươu, uyê):
+        // Mặc định âm chính ở giữa (thoái, xoay, khuấy, khuỷu)
         return 1;
     }
 

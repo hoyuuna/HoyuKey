@@ -67,14 +67,14 @@ pub fn transform_telex(
 
     // 3. Phím mũ: 'a', 'e', 'o'
     if matches!(key_lower, 'a' | 'e' | 'o') {
-        if let Some(res) = handle_hat_key(word, key_lower, is_key_upper, free_marking) {
+        if let Some(res) = handle_hat_key(word, key_lower, is_key_upper, free_marking, modern_tone) {
             return Some(res);
         }
     }
 
     // 4. Phím móc / trăng: 'w' / 'W'
     if key_lower == 'w' {
-        if let Some(res) = handle_w_key(word, is_key_upper, free_marking, simple_telex, raw_keys) {
+        if let Some(res) = handle_w_key(word, is_key_upper, free_marking, simple_telex, raw_keys, modern_tone) {
             return Some(res);
         }
     }
@@ -216,7 +216,13 @@ fn handle_d_key(word: &str, is_key_upper: bool, free_marking: bool) -> Option<St
 }
 
 /// Xử lý phím mũ 'a', 'e', 'o'
-fn handle_hat_key(word: &str, key: char, is_key_upper: bool, free_marking: bool) -> Option<String> {
+fn handle_hat_key(
+    word: &str,
+    key: char,
+    is_key_upper: bool,
+    free_marking: bool,
+    modern_tone: bool,
+) -> Option<String> {
     let mut decomp = decompose_word(word)?;
     if decomp.vowels.is_empty() {
         return None;
@@ -239,6 +245,12 @@ fn handle_hat_key(word: &str, key: char, is_key_upper: bool, free_marking: bool)
 
     if current_mod == VowelMod::None {
         decomp.vowels[idx].vmod = VowelMod::Hat;
+        // Nếu từ trước đó đã có dấu thanh (ví dụ: gõ 'xúa' rồi gõ 'a'),
+        // thì khi 'a' thành 'â', dấu thanh phải được chuyển sang 'â' (thành 'xuấ')!
+        let existing_tone = decomp.current_tone();
+        if existing_tone != Tone::None {
+            decomp.apply_tone(existing_tone, modern_tone);
+        }
         let new_word = decomp.recompose();
         return Some(new_word);
     } else if current_mod == VowelMod::Hat {
@@ -263,6 +275,7 @@ fn handle_w_key(
     free_marking: bool,
     simple_telex: bool,
     raw_keys: Option<&str>,
+    modern_tone: bool,
 ) -> Option<String> {
     // 0. Double-tap 'w' thoát dấu móc chuẩn OpenKey / UniKey:
     if let Some(raw) = raw_keys {
@@ -337,6 +350,10 @@ fn handle_w_key(
                     return Some(format!("{}{}", base_word, append_w));
                 } else {
                     decomp.vowels[i + 1].vmod = VowelMod::Breve;
+                    let existing_tone = decomp.current_tone();
+                    if existing_tone != Tone::None {
+                        decomp.apply_tone(existing_tone, modern_tone);
+                    }
                     return Some(decomp.recompose());
                 }
             }
@@ -357,6 +374,10 @@ fn handle_w_key(
                         return Some(format!("{}{}", base_word, append_w));
                     } else {
                         decomp.vowels[i + 1].vmod = VowelMod::Horn;
+                        let existing_tone = decomp.current_tone();
+                        if existing_tone != Tone::None {
+                            decomp.apply_tone(existing_tone, modern_tone);
+                        }
                         return Some(decomp.recompose());
                     }
                 } else if decomp.vowels[i].vmod == VowelMod::Horn
@@ -370,6 +391,10 @@ fn handle_w_key(
                 } else {
                     decomp.vowels[i].vmod = VowelMod::Horn;
                     decomp.vowels[i + 1].vmod = VowelMod::Horn;
+                    let existing_tone = decomp.current_tone();
+                    if existing_tone != Tone::None {
+                        decomp.apply_tone(existing_tone, modern_tone);
+                    }
                     return Some(decomp.recompose());
                 }
             }
@@ -377,6 +402,7 @@ fn handle_w_key(
     }
 
     // 3. Kiểm tra 'u' -> 'ư'
+    let existing_tone = decomp.current_tone();
     for v in decomp.vowels.iter_mut() {
         if v.base == 'u' {
             if v.vmod == VowelMod::Horn {
@@ -386,6 +412,9 @@ fn handle_w_key(
                 return Some(format!("{}{}", base, append_w));
             } else {
                 v.vmod = VowelMod::Horn;
+                if existing_tone != Tone::None {
+                    decomp.apply_tone(existing_tone, modern_tone);
+                }
                 return Some(decomp.recompose());
             }
         }
@@ -402,6 +431,9 @@ fn handle_w_key(
                     return Some(format!("{}{}", base, append_w));
                 } else if v.vmod == VowelMod::None {
                     v.vmod = VowelMod::Horn;
+                    if existing_tone != Tone::None {
+                        decomp.apply_tone(existing_tone, modern_tone);
+                    }
                     return Some(decomp.recompose());
                 }
             }
@@ -419,6 +451,9 @@ fn handle_w_key(
                     return Some(format!("{}{}", base, append_w));
                 } else if v.vmod == VowelMod::None {
                     v.vmod = VowelMod::Breve;
+                    if existing_tone != Tone::None {
+                        decomp.apply_tone(existing_tone, modern_tone);
+                    }
                     return Some(decomp.recompose());
                 }
             }

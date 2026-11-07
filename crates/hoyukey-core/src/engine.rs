@@ -908,6 +908,9 @@ mod tests {
         // 6. Gõ dấu thanh trước phụ âm cuối (như xuaast -> xuất, bieest -> biết, baast -> bất):
         // Tuyệt đối không được kích hoạt nhầm auto-restore 'st' thành chuỗi thô tiếng Anh!
         assert_eq!(type_single_word(&mut engine, "xuaast"), "xuất");
+        assert_eq!(type_single_word(&mut engine, "xuasat"), "xuất");
+        assert_eq!(type_single_word(&mut engine, "xuats"), "xuất");
+        assert_eq!(type_single_word(&mut engine, "xuaats"), "xuất");
         assert_eq!(type_single_word(&mut engine, "bieest"), "biết");
         assert_eq!(type_single_word(&mut engine, "tieest"), "tiết");
         assert_eq!(type_single_word(&mut engine, "baast"), "bất");
