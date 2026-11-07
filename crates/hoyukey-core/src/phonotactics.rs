@@ -209,8 +209,21 @@ pub fn select_tone_vowel_index(vowels: &[VowelPart], has_trail: bool, modern_ton
 
         // Các cặp nguyên âm đôi mở thuần túy ia, ua, ưa (không có mũ):
         // Dấu luôn ở nguyên âm thứ nhất (mía, múa, mứa, kìa, chùa)
-        if (v0 == 'i' && v1 == 'a') || (v0 == 'u' && v1 == 'a') || (v0 == 'u' && vowels[0].vmod == VowelMod::Horn && v1 == 'a') {
+        if (v0 == 'i' && v1 == 'a' && vowels[1].vmod == VowelMod::None)
+            || (v0 == 'u' && v1 == 'a' && vowels[1].vmod == VowelMod::None)
+            || (v0 == 'u' && vowels[0].vmod == VowelMod::Horn && v1 == 'a' && vowels[1].vmod == VowelMod::None)
+        {
             return 0;
+        }
+
+        // Cặp uâ (xuất, uất, tuần, chuẩn): dấu luôn ở â (index 1)
+        if v0 == 'u' && v1 == 'a' && vowels[1].vmod == VowelMod::Hat {
+            return 1;
+        }
+
+        // Cặp uơ (thuở): dấu luôn ở ơ
+        if v0 == 'u' && v1 == 'o' && vowels[1].vmod == VowelMod::Horn {
+            return 1;
         }
 
         // Các cặp oa, oe, uy:
@@ -397,7 +410,56 @@ pub fn is_valid_vietnamese_phonotactics(word: &str) -> bool {
         }
     }
 
+    // 5. Cụm nguyên âm phải hợp lệ trong tiếng Việt (chuẩn UniKey VSeqList)
+    if !is_valid_vietnamese_vowel_cluster(&decomposed.vowels, decomposed.lead == "q" || decomposed.is_qu_lead) {
+        return false;
+    }
+
     true
+}
+
+/// Kiểm tra cụm nguyên âm có hợp lệ trong tiếng Việt hay không (UniKey VSeqList)
+pub fn is_valid_vietnamese_vowel_cluster(vowels: &[VowelPart], has_lead_q: bool) -> bool {
+    let len = vowels.len();
+    if len <= 1 {
+        return true;
+    }
+    let v_str: String = vowels.iter().map(|v| {
+        match (v.base, v.vmod) {
+            ('a', VowelMod::Breve) => 'ă',
+            ('a', VowelMod::Hat) => 'â',
+            ('e', VowelMod::Hat) => 'ê',
+            ('o', VowelMod::Hat) => 'ô',
+            ('o', VowelMod::Horn) => 'ơ',
+            ('u', VowelMod::Horn) => 'ư',
+            (b, _) => b,
+        }
+    }).collect();
+
+    if len == 2 {
+        if v_str == "ue" || v_str == "uê" {
+            return has_lead_q;
+        }
+        return matches!(
+            v_str.as_str(),
+            "ai" | "ao" | "au" | "ay" | "âu" | "ây"
+            | "eo" | "êu"
+            | "ia" | "ie" | "iê" | "iu" | "ya" | "ye" | "yê"
+            | "oa" | "oă" | "oe" | "oê" | "oi" | "ôi" | "ơi" | "oo"
+            | "ua" | "uâ" | "uê" | "ui" | "uy" | "uo" | "uô" | "uơ" | "ưa" | "ươ" | "ưo" | "ưu" | "ưi"
+        );
+    }
+
+    if len == 3 {
+        return matches!(
+            v_str.as_str(),
+            "iêu" | "yêu"
+            | "oai" | "oay" | "oeo"
+            | "uai" | "uay" | "uây" | "uôi" | "ươi" | "ươu" | "uya" | "uyê" | "uyu"
+        );
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -434,12 +496,12 @@ mod tests {
     #[test]
     fn test_tone_placement_modern_vs_classic() {
         let mut d = decompose_word("hoa").unwrap();
-        d.apply_tone(Tone::Acute, true); // modern
-        assert_eq!(d.recompose(), "hóa");
+        d.apply_tone(Tone::Acute, true); // modern: hoá, hoè, thuý (dấu ở âm chính thứ 2)
+        assert_eq!(d.recompose(), "hoá");
 
         let mut d2 = decompose_word("hoa").unwrap();
-        d2.apply_tone(Tone::Acute, false); // classic
-        assert_eq!(d2.recompose(), "hoá");
+        d2.apply_tone(Tone::Acute, false); // classic: hóa, hòe, thúy (dấu ở âm đầu)
+        assert_eq!(d2.recompose(), "hóa");
     }
 
     #[test]

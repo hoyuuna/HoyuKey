@@ -1,7 +1,7 @@
 // hoyukey-core: Dynamic Telex Transformation Engine
 // Thuật toán biến đổi phím Telex dựa trên hình vị học động (Zero-dependency, không dùng từ điển).
 
-use crate::phonotactics::{decompose_word, is_english_foreign_word, VowelPart};
+use crate::phonotactics::{decompose_word, is_english_foreign_word, is_valid_vietnamese_phonotactics, VowelPart};
 use crate::vietnamese::{Tone, VowelMod};
 
 pub const CHAR_D_STROKE_LOWER: char = '\u{0111}'; // 'đ'
@@ -115,39 +115,41 @@ fn handle_bracket_keys(word: &str, key: char) -> Option<String> {
         }
     }
 
-    let mut decomp = match decompose_word(word) {
-        Some(d) => d,
-        None => {
+    let mut decomp = decompose_word(word)?;
+
+    // 2. Phụ âm đầu chưa có nguyên âm (ví dụ: 'b' + ']' -> 'bơ', 'b' + '[' -> 'bư')
+    if decomp.vowels.is_empty() {
+        if !decomp.lead.is_empty() && decomp.trail.is_empty() {
             let ch = if is_open_bracket {
                 if is_upper { CHAR_U_HORN_UPPER } else { CHAR_U_HORN_LOWER }
             } else {
                 if is_upper { CHAR_O_HORN_UPPER } else { CHAR_O_HORN_LOWER }
             };
-            return Some(format!("{}{}", word, ch));
+            return Some(format!("{}{}", decomp.lead, ch));
         }
-    };
+        return None;
+    }
 
     if is_open_bracket {
-        // '[' hoặc '{': biến 'u' thành 'ư', hoặc thêm 'ư'
-        if !decomp.vowels.is_empty() {
-            for v in decomp.vowels.iter_mut() {
-                if v.base == 'u' {
-                    v.vmod = VowelMod::Horn;
-                    return Some(decomp.recompose());
-                }
+        // '[' hoặc '{': biến 'u' thành 'ư'
+        for v in decomp.vowels.iter_mut() {
+            if v.base == 'u' && v.vmod != VowelMod::Horn {
+                v.vmod = VowelMod::Horn;
+                return Some(decomp.recompose());
             }
         }
-        let ch = if is_upper { CHAR_U_HORN_UPPER } else { CHAR_U_HORN_LOWER };
-        Some(format!("{}{}", word, ch))
+        None
     } else {
         // ']' hoặc '}':
         // uo -> ươ
         if decomp.vowels.len() >= 2 {
             for i in 0..(decomp.vowels.len() - 1) {
                 if decomp.vowels[i].base == 'u' && decomp.vowels[i + 1].base == 'o' {
-                    decomp.vowels[i].vmod = VowelMod::Horn;
-                    decomp.vowels[i + 1].vmod = VowelMod::Horn;
-                    return Some(decomp.recompose());
+                    if decomp.vowels[i].vmod != VowelMod::Horn || decomp.vowels[i + 1].vmod != VowelMod::Horn {
+                        decomp.vowels[i].vmod = VowelMod::Horn;
+                        decomp.vowels[i + 1].vmod = VowelMod::Horn;
+                        return Some(decomp.recompose());
+                    }
                 }
             }
         }
@@ -165,13 +167,12 @@ fn handle_bracket_keys(word: &str, key: char) -> Option<String> {
         }
         // o -> ơ
         for v in decomp.vowels.iter_mut() {
-            if v.base == 'o' {
+            if v.base == 'o' && v.vmod != VowelMod::Horn {
                 v.vmod = VowelMod::Horn;
                 return Some(decomp.recompose());
             }
         }
-        let ch = if is_upper { CHAR_O_HORN_UPPER } else { CHAR_O_HORN_LOWER };
-        Some(format!("{}{}", word, ch))
+        None
     }
 }
 
@@ -231,14 +232,13 @@ fn handle_hat_key(
         return None;
     }
 
-    let mut target_idx = None;
-    for (i, v) in decomp.vowels.iter().enumerate() {
-        if v.base == key {
-            target_idx = Some(i);
-        }
+    // Phím mũ 'a', 'e', 'o' chỉ áp dụng cho nguyên âm liền kề cuối cùng trong cụm nguyên âm
+    // (tránh trường hợp 'oe' + 'o' bị biến thành 'ôe' thay vì 'oeo' như 'ngoeor' -> 'ngoẻo')
+    let last_idx = decomp.vowels.len() - 1;
+    if decomp.vowels[last_idx].base != key {
+        return None;
     }
-
-    let idx = target_idx?;
+    let idx = last_idx;
 
     if !free_marking && !decomp.trail.is_empty() {
         return None;
@@ -255,6 +255,9 @@ fn handle_hat_key(
             decomp.apply_tone(existing_tone, modern_tone);
         }
         let new_word = decomp.recompose();
+        if !is_valid_vietnamese_phonotactics(&new_word) {
+            return None;
+        }
         return Some(new_word);
     } else if current_mod == VowelMod::Hat {
         // Đã có mũ, người dùng gõ lặp lại -> thoát mũ (ví dụ: 'â' + 'a' -> 'aa')
@@ -513,11 +516,8 @@ fn handle_tone_key(
     decomp.apply_tone(target_tone, modern_tone);
     let new_word = decomp.recompose();
 
-    // Kiểm tra quy tắc âm tắc: c, ch, p, t chỉ đi với Sắc hoặc Nặng
-    if matches!(decomp.trail.as_str(), "c" | "ch" | "p" | "t") {
-        if matches!(target_tone, Tone::Grave | Tone::Hook | Tone::Tilde) {
-            return None;
-        }
+    if !is_valid_vietnamese_phonotactics(&new_word) {
+        return None;
     }
 
     Some(new_word)

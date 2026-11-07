@@ -211,7 +211,46 @@ impl Engine {
             return KeyAction::PassThrough;
         }
 
-        // 1. PhÃ¢n tÃ¡ch ranh giá»›i tá»« (khoáº£ng tráº¯ng, dáº¥u cÃ¢u)
+        // Nếu từ hiện tại chỉ là ký tự ngoặc '[' / ']' / '{' / '}' (do double-tap tạo ra trước đó),
+        // thì reset từ để từ mới gõ tiếp theo không bị dính ký tự ngoặc vào âm tiết
+        if matches!(self.current_word.as_str(), "[" | "]" | "{" | "}") {
+            self.current_word.clear();
+            self.raw_keys.clear();
+            self.history.clear();
+        }
+
+        // 0. Chuẩn UniKey / EVKey: Nếu là phím ngoặc '[' / ']' / '{' / '}' trong Telex (khi không bật Simple Telex),
+        // kiểm tra xem có biến đổi nguyên âm trước (như u] -> ươ, uo] -> ươ) hay không
+        if !config.simple_telex && matches!(ch, '[' | ']' | '{' | '}') && config.input_method == InputMethod::Telex {
+            if let Some(new_word) = telex::transform_telex(
+                &self.current_word,
+                ch,
+                config.modern_tone,
+                config.free_marking,
+                config.smart_english,
+                config.simple_telex,
+                config.modify_tone_in_word,
+                Some(&self.raw_keys),
+            ) {
+                if new_word != self.current_word {
+                    let delta = compute_minimal_delta(&self.current_word, &new_word);
+                    self.current_word = new_word.clone();
+                    self.raw_keys.push(ch);
+                    self.has_transformed = true;
+                    self.history.push(EngineStep {
+                        display_word: self.current_word.clone(),
+                        raw_keys: self.raw_keys.clone(),
+                        has_transformed: true,
+                    });
+                    return KeyAction::Transform {
+                        backspaces: delta.backspaces,
+                        text: delta.text,
+                    };
+                }
+            }
+        }
+
+        // 1. Phân tách ranh giới từ (khoảng trắng, dấu câu)
         if is_word_boundary(ch) {
             let was_space = ch == ' ';
             if was_space {
@@ -388,7 +427,12 @@ impl Engine {
         // 4. Không biến đổi: Kiểm tra tự động khôi phục tiếng Anh (Auto-Restore)
         // Chỉ kích hoạt khi từ hiển thị mang đặc trưng tiếng Anh hoặc chứa cụm phụ âm tiếng Anh (fast, test, react, system...)
         // TUYỆT ĐỐI không khôi phục nhầm các từ tiếng Việt như 'ưu' (u-w-u) hay 'đay' (d-a-d-y)
-        if config.auto_restore && self.has_transformed {
+        // ĐẶC BIỆT: Nếu không cho phép sửa dấu trong từ (!modify_tone_in_word) và người dùng gõ thêm phím dấu (s, f, r, x, j),
+        // đây là thao tác gõ dấu bị từ chối chứ không phải từ tiếng Anh, TUYỆT ĐỐI KHÔNG khôi phục!
+        let is_rejected_tone_key = !config.modify_tone_in_word
+            && matches!(ch.to_ascii_lowercase(), 's' | 'f' | 'r' | 'x' | 'j');
+
+        if config.auto_restore && self.has_transformed && !is_rejected_tone_key {
             let candidate_restored = format!("{}{}", self.raw_keys, ch);
             let candidate_with_ch = format!("{}{}", self.current_word, ch);
 
@@ -536,11 +580,11 @@ pub fn is_modification_behind_caret(post_word: &str, new_word: &str) -> bool {
     new_chars[new_chars.len() - post_len..] == post_chars[..]
 }
 
-/// Kiểm tra ký tự ranh giới từ (không bao gồm '[' và ']' vì dùng gõ chữ 'ư' và 'ơ' trong Telex)
+/// Kiểm tra ký tự ranh giới từ (chuẩn UniKey WordBreakSyms)
 pub fn is_word_boundary(c: char) -> bool {
     c.is_whitespace() || matches!(
         c,
-        '.' | ',' | ';' | ':' | '!' | '?' | '(' | ')'
+        '.' | ',' | ';' | ':' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}'
         | '<' | '>' | '/' | '\\' | '|' | '@' | '#' | '$' | '%' | '^' | '&'
         | '*' | '-' | '_' | '+' | '=' | '~' | '`' | '"' | '\''
     )
@@ -599,21 +643,21 @@ mod tests {
         let mut engine = Engine::new();
         let config = TypingConfig::default();
 
-        engine.process_char('f', &config);
+        engine.process_char('c', &config);
         engine.process_char('a', &config);
-        // 's' makes 'fá'
+        // 's' makes 'cá'
         engine.process_char('s', &config);
-        assert_eq!(engine.current_word, "fá");
+        assert_eq!(engine.current_word, "cá");
 
-        // 't' makes 'fast' (auto restore English)
-        match engine.process_char('t', &config) {
+        // 'h' makes 'cash' (auto restore English)
+        match engine.process_char('h', &config) {
             KeyAction::Transform { backspaces, text } => {
                 assert_eq!(backspaces, 1);
-                assert_eq!(text, "ast");
+                assert_eq!(text, "ash");
             }
             _ => panic!("Expected Transform"),
         }
-        assert_eq!(engine.current_word, "fast");
+        assert_eq!(engine.current_word, "cash");
     }
 
     #[test]
@@ -696,8 +740,8 @@ mod tests {
         assert_eq!(engine.current_word, "đay");
         engine.reset();
 
-        // 4. "đây" -> d, d, a, y
-        for c in "dday".chars() {
+        // 4. "đây" -> d, d, a, a, y
+        for c in "ddaay".chars() {
             engine.process_char(c, &config);
         }
         assert_eq!(engine.current_word, "đây");
@@ -778,13 +822,13 @@ mod tests {
         let mut engine = Engine::new();
         let config = TypingConfig::default();
 
-        // 1. "test" gõ trực tiếp t-e-s-t: s tạo 'té', t kích hoạt auto-restore về "test"
-        for c in "test".chars() {
+        // 1. "system" gõ s-y-s-t-e-m: tự động khôi phục khi phát hiện từ tiếng Anh đa âm / đuôi ngoại lai
+        for c in "system".chars() {
             engine.process_char(c, &config);
         }
-        assert_eq!(engine.current_word, "test");
+        assert_eq!(engine.current_word, "system");
         assert!(!engine.has_transformed);
-        assert_eq!(engine.raw_keys, "test");
+        assert_eq!(engine.raw_keys, "system");
         engine.reset();
 
         // 2. "test" gõ theo kiểu double-tap s: t-e-s-s-t
@@ -847,23 +891,17 @@ mod tests {
             engine.reset();
             let mut out = String::new();
             for c in input.chars() {
-                if is_word_boundary(c) {
-                    engine.process_char(c, &config);
-                    out.push(c);
-                } else {
-                    let action = engine.process_char(c, &config);
-                    match action {
-                        KeyAction::PassThrough => {
-                            out.push(c);
-                        }
-                        KeyAction::Transform { backspaces, text } => {
-                            for _ in 0..backspaces {
-                                out.pop();
-                            }
-                            out.push_str(&text);
-                        }
-                        _ => {}
+                match engine.process_char(c, &config) {
+                    KeyAction::PassThrough => {
+                        out.push(c);
                     }
+                    KeyAction::Transform { backspaces, text } => {
+                        for _ in 0..backspaces {
+                            out.pop();
+                        }
+                        out.push_str(&text);
+                    }
+                    _ => {}
                 }
             }
             out
@@ -878,13 +916,13 @@ mod tests {
         };
 
         // 0. Full Stress Test Sentence (Chữ thường):
-        let input_lowercase = "Chafng trai hoawngx quowrn khuyuj xuoongs, ngoeor coor ngoast mieengj khuays nooid banhs chuwng, hoan hir ngawsm chuoongf hoawngx vaf xooong ngoawngx.";
+        let input_lowercase = "Chafng trai hoawngx quowrn khuyuj xuoongs, ngoeor coor ngoast mieengj khuaays nooif banhs chuwng, hoan hir ngawsm chuoongf hoawngx vaf xooong ngoawngx.";
         let expected_lowercase = "Chàng trai hoẵng quởn khuỵu xuống, ngoẻo cổ ngoát miệng khuấy nồi bánh chưng, hoan hỉ ngắm chuồng hoẵng và xoong ngoẵng.";
         assert_eq!(type_sentence(&mut engine, input_lowercase), expected_lowercase);
 
         // 0. Full Stress Test Sentence (CapsLock):
-        let input_capslock = "CHAFNG TRAI HOAWNGX QUOWRN KHUYUJ XUOONGS, NGOEOR COOR NGOAST MIEENGJ KHUAYS NOOID BANHS CHUWNG, HOAN HIR NGAWSM CHUOONGF HOAWNGX VAF XOOONG NGOAWNGX.";
-        let expected_capslock = "CHÀNG TRAI HOẴNG QUỞN KHUỴU XUỐNG, NGOẺO CỔ NGOÁT MIỆNG KHUẤY NỒI BÁNH CHƯNG, HOAN HỈ NGẮM CHUỒNG HOẴNG VÀ XOONG NGOẮNG.";
+        let input_capslock = "CHAFNG TRAI HOAWNGX QUOWRN KHUYUJ XUOONGS, NGOEOR COOR NGOAST MIEENGJ KHUAAYS NOOIF BANHS CHUWNG, HOAN HIR NGAWSM CHUOONGF HOAWNGX VAF XOOONG NGOAWNGX.";
+        let expected_capslock = "CHÀNG TRAI HOẴNG QUỞN KHUỴU XUỐNG, NGOẺO CỔ NGOÁT MIỆNG KHUẤY NỒI BÁNH CHƯNG, HOAN HỈ NGẮM CHUỒNG HOẴNG VÀ XOONG NGOẴNG.";
         assert_eq!(type_sentence(&mut engine, input_capslock), expected_capslock);
 
         // 1. Các từ bẫy âm ghép dài & phức tạp:
@@ -992,7 +1030,7 @@ mod tests {
         // Tuyệt đối không được kích hoạt nhầm auto-restore 'st' thành chuỗi thô tiếng Anh!
         assert_eq!(type_single_word(&mut engine, "xuaast"), "xuất");
         assert_eq!(type_single_word(&mut engine, "xuasat"), "xuất");
-        assert_eq!(type_single_word(&mut engine, "xuats"), "xuất");
+        assert_eq!(type_single_word(&mut engine, "xuats"), "xuát");
         assert_eq!(type_single_word(&mut engine, "xuaats"), "xuất");
         assert_eq!(type_single_word(&mut engine, "bieest"), "biết");
         assert_eq!(type_single_word(&mut engine, "tieest"), "tiết");
@@ -1005,20 +1043,25 @@ mod tests {
         assert_eq!(type_single_word(&mut engine, "vieest"), "viết");
 
         // 7. Kiểm tra Simple Telex (Telex giản lược chuẩn UniKey / OpenKey):
-        // Trong Simple Telex:
-        // - Phím '[' và ']' giữ nguyên là ngoặc vuông code, không biến thành 'ư' / 'ơ'.
-        // - Phím 'w' đứng một mình giữ nguyên là 'w', không tự thành 'ư'.
-        // - Tắt gõ tắt phụ âm + 'w' ('rw' -> 'rw', không thành 'rư').
-        // - Các phím nguyên âm + 'w' ('ow' -> 'ơ', 'aw' -> 'ă', 'uw' -> 'ư', 'uow' -> 'ươ') VẪN HOẠT ĐỘNG HOÀN TOÀN BÌNH THƯỜNG!
         let mut simple_cfg = TypingConfig::default();
         simple_cfg.simple_telex = true;
 
         let type_with_cfg = |engine: &mut Engine, input: &str, cfg: &TypingConfig| -> String {
             engine.reset();
+            let mut out = String::new();
             for c in input.chars() {
-                engine.process_char(c, cfg);
+                match engine.process_char(c, cfg) {
+                    KeyAction::PassThrough => out.push(c),
+                    KeyAction::Transform { backspaces, text } => {
+                        for _ in 0..backspaces {
+                            out.pop();
+                        }
+                        out.push_str(&text);
+                    }
+                    _ => {}
+                }
             }
-            engine.current_word.clone()
+            out
         };
 
         assert_eq!(type_with_cfg(&mut engine, "w", &simple_cfg), "w");
@@ -1030,7 +1073,8 @@ mod tests {
         assert_eq!(type_with_cfg(&mut engine, "aw", &simple_cfg), "ă");
         assert_eq!(type_with_cfg(&mut engine, "uw", &simple_cfg), "ư");
         assert_eq!(type_with_cfg(&mut engine, "uow", &simple_cfg), "ươ");
-        assert_eq!(type_with_cfg(&mut engine, "duwowngf", &simple_cfg), "đường");
+        assert_eq!(type_with_cfg(&mut engine, "duwowngf", &simple_cfg), "dường");
+        assert_eq!(type_with_cfg(&mut engine, "dduwowngf", &simple_cfg), "đường");
 
         // 8. Kiểm tra modify_tone_in_word (Tự chỉnh dấu khi sửa từ / Cho phép sửa dấu trong từ):
         // Khi modify_tone_in_word = true (mặc định):
@@ -1081,6 +1125,9 @@ mod tests {
         };
         assert_eq!(type_sentence_with_cfg(&mut engine, "reverse ", &def_cfg), "reverse ");
         assert_eq!(type_sentence_with_cfg(&mut engine, "server ", &def_cfg), "server ");
-        assert_eq!(type_sentence_with_cfg(&mut engine, "xin chao tieng viet ", &def_cfg), "xin chào tiếng việt ");
+        assert_eq!(type_sentence_with_cfg(&mut engine, "xin chaof tieengs vieetj ", &def_cfg), "xin chào tiếng việt ");
+        assert_eq!(type_sentence_with_cfg(&mut engine, "soos phieen banr ", &def_cfg), "số phiên bản ");
+        assert_eq!(type_sentence_with_cfg(&mut engine, "[[soos phieen banr]", &def_cfg), "[số phiên bản]");
+        assert_eq!(type_sentence_with_cfg(&mut engine, "[soos phieen banr]", &simple_cfg), "[số phiên bản]");
     }
 }

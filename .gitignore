@@ -4,3 +4,4 @@
 temp/
 *.exe
 *.pdb
+.vscode/
