@@ -222,6 +222,26 @@ impl Engine {
                 self.spaces_after_word = 0;
             }
 
+            // Chuẩn UniKey (processWordEnd / autoNonVnRestore) & OpenKey (checkRestoreIfWrongSpelling):
+            // Khi nhấn phím cách hoặc ký tự ngắt từ, nếu từ vừa gõ vi phạm chính tả tiếng Việt
+            // (ví dụ: 'réve', 'sẻver', 'tét', 'póst', 'fíx'...) thì lập tức khôi phục lại chuỗi phím gốc tiếng Anh trước khi gửi ch!
+            if config.auto_restore && self.has_transformed {
+                if should_auto_restore_english(&self.current_word, &self.raw_keys) {
+                    let delta = compute_minimal_delta(&self.current_word, &self.raw_keys);
+                    let restored_text = format!("{}{}", delta.text, ch);
+                    self.current_word.clear();
+                    self.raw_keys.clear();
+                    self.has_transformed = false;
+                    self.history.clear();
+                    self.caret_offset = None;
+                    self.last_char_typed = Some(ch);
+                    return KeyAction::Transform {
+                        backspaces: delta.backspaces,
+                        text: restored_text,
+                    };
+                }
+            }
+
             if !self.current_word.is_empty() {
                 self.line_words.push(TypedWord {
                     word: self.current_word.clone(),
@@ -1034,5 +1054,33 @@ mod tests {
         assert_eq!(type_with_cfg(&mut engine, "win", &def_cfg), "win");
         assert_eq!(type_with_cfg(&mut engine, "web", &def_cfg), "web");
         assert_eq!(type_with_cfg(&mut engine, "word", &def_cfg), "word");
+
+        // 10. Kiểm tra gõ từ tiếng Anh không bị dính dấu tiếng Việt (reverse, server, service, develop...)
+        // và tự động khôi phục khi nhấn phím cách (UniKey autoNonVnRestore):
+        assert_eq!(type_with_cfg(&mut engine, "reverse", &def_cfg), "reverse");
+        assert_eq!(type_with_cfg(&mut engine, "server", &def_cfg), "server");
+        assert_eq!(type_with_cfg(&mut engine, "service", &def_cfg), "service");
+        assert_eq!(type_with_cfg(&mut engine, "develop", &def_cfg), "develop");
+
+        let type_sentence_with_cfg = |engine: &mut Engine, input: &str, cfg: &TypingConfig| -> String {
+            engine.reset();
+            let mut out = String::new();
+            for c in input.chars() {
+                match engine.process_char(c, cfg) {
+                    KeyAction::PassThrough => out.push(c),
+                    KeyAction::Transform { backspaces, text } => {
+                        for _ in 0..backspaces {
+                            out.pop();
+                        }
+                        out.push_str(&text);
+                    }
+                    _ => {}
+                }
+            }
+            out
+        };
+        assert_eq!(type_sentence_with_cfg(&mut engine, "reverse ", &def_cfg), "reverse ");
+        assert_eq!(type_sentence_with_cfg(&mut engine, "server ", &def_cfg), "server ");
+        assert_eq!(type_sentence_with_cfg(&mut engine, "xin chao tieng viet ", &def_cfg), "xin chào tiếng việt ");
     }
 }

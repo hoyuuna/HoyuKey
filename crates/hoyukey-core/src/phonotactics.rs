@@ -314,7 +314,30 @@ pub fn is_english_foreign_word(word: &str) -> bool {
     }
 
     // 3. Đa âm tiết (nhiều cụm nguyên âm)
-    has_multiple_vowel_clusters(&lower)
+    if has_multiple_vowel_clusters(&lower) {
+        return true;
+    }
+
+    // 4. Chứa phụ âm sau nguyên âm không thể là âm cuối tiếng Việt:
+    // Âm cuối tiếng Việt CHỈ CÓ THỂ LÀ: c, ch, m, n, ng, nh, p, t hoặc rỗng
+    // Bất kỳ từ nào có nguyên âm mà kết thúc bằng phụ âm không thuộc danh sách trên (v, l, r, s, d, b, g, k, x, z...)
+    // thì 100% là tiếng Anh (rev, level, car, bus, web, log, model...)
+    let mut saw_vowel = false;
+    let mut coda = String::new();
+    for &c in &chars {
+        if is_vietnamese_vowel_char(c) {
+            saw_vowel = true;
+            coda.clear();
+        } else if saw_vowel && c.is_alphabetic() {
+            coda.push(c);
+        }
+    }
+
+    if !coda.is_empty() && !is_valid_vietnamese_trail(&coda) {
+        return true;
+    }
+
+    false
 }
 
 /// Kiểm tra phụ âm đầu hợp lệ trong tiếng Việt (chuẩn UniKey / OpenKey / BambooCore)
