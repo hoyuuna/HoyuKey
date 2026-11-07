@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HoyuKey — Bộ gõ tiếng Việt gọn nhẹ cho Windows</title>
+  <meta name="description" content="HoyuKey là bộ gõ tiếng Việt mã nguồn mở viết bằng Rust cho Windows. Xử lý chuẩn ngữ âm, không lỗi trình duyệt, tiêu tốn chưa tới 2MB RAM." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --background: #09090b;
+      --foreground: #fafafa;
+      --card: #121215;
+      --card-hover: #18181c;
+      --muted: #1c1c22;
+      --muted-foreground: #a1a1aa;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.16);
+      --primary: #ffffff;
+      --primary-foreground: #09090b;
+      --accent: #3b82f6;
+      --accent-soft: rgba(59, 130, 246, 0.12);
+      --success: #22c55e;
+      --radius: 10px;
+      --radius-lg: 14px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--background);
+      color: var(--foreground);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    a {
+      text-decoration: none;
+      color: inherit;
+    }
+
+    /* Header */
+    header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(9, 9, 11, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 1.1rem;
+      letter-spacing: -0.01em;
+    }
+
+    .logo-icon {
+      width: 30px;
+      height: 30px;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 14px;
+      color: white;
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+
+    nav a {
+      font-size: 0.9rem;
+      color: var(--muted-foreground);
+      transition: color 0.15s ease;
+    }
+
+    nav a:hover {
+      color: var(--foreground);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-weight: 500;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--primary-foreground);
+    }
+
+    .btn-primary:hover {
+      background: #e4e4e7;
+      transform: translateY(-1px);
+    }
+
+    .btn-outline {
+      background: transparent;
+      border-color: var(--border-strong);
+      color: var(--foreground);
+    }
+
+    .btn-outline:hover {
+      background: var(--muted);
+    }
+
+    .btn-lg {
+      padding: 13px 24px;
+      font-size: 0.975rem;
+      border-radius: 9px;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 130px 24px 70px;
+      text-align: center;
+      position: relative;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 640px;
+      height: 420px;
+      background: radial-gradient(ellipse, rgba(59, 130, 246, 0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 13px;
+      background: var(--accent-soft);
+      color: #93c5fd;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      margin-bottom: 22px;
+      border: 1px solid rgba(59, 130, 246, 0.25);
+    }
+
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      background: #3b82f6;
+      border-radius: 50%;
+    }
+
+    .hero h1 {
+      font-size: clamp(2.1rem, 4.5vw, 3.2rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.18;
+      margin-bottom: 16px;
+      max-width: 720px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .hero h1 span {
+      background: linear-gradient(135deg, #60a5fa, #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero p {
+      font-size: 1.1rem;
+      color: var(--muted-foreground);
+      max-width: 560px;
+      margin: 0 auto 32px;
+      line-height: 1.6;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 48px;
+    }
+
+    .hero-stats {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      flex-wrap: wrap;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .stat {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 1.55rem;
+      font-weight: 700;
+      color: var(--foreground);
+      letter-spacing: -0.02em;
+    }
+
+    .stat-label {
+      font-size: 0.825rem;
+      color: var(--muted-foreground);
+      margin-top: 2px;
+    }
+
+    /* Sections */
+    section {
+      padding: 72px 24px;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .section-header h2 {
+      font-size: 1.85rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 10px;
+    }
+
+    .section-header p {
+      color: var(--muted-foreground);
+      max-width: 520px;
+      margin: 0 auto;
+      font-size: 0.95rem;
+    }
+
+    /* Grid */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      gap: 18px;
+    }
+
+    .feature-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+    }
+
+    .feature-card:hover {
+      background: var(--card-hover);
+      border-color: var(--border-strong);
+      transform: translateY(-2px);
+    }
+
+    .feature-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+      background: var(--muted);
+      color: #60a5fa;
+    }
+
+    .feature-card h3 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+
+    .feature-card p {
+      font-size: 0.9rem;
+      color: var(--muted-foreground);
+      line-height: 1.55;
+    }
+
+    /* Highlight Section */
+    .highlight {
+      background: linear-gradient(180deg, #101014 0%, var(--background) 100%);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .highlight-inner {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 40px;
+      align-items: center;
+    }
+
+    .highlight-content h2 {
+      font-size: 1.85rem;
+      font-weight: 700;
+      margin-bottom: 14px;
+      letter-spacing: -0.02em;
+    }
+
+    .highlight-content p {
+      color: var(--muted-foreground);
+      margin-bottom: 20px;
+      font-size: 0.975rem;
+      line-height: 1.6;
+    }
+
+    .highlight-specs {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-top: 20px;
+    }
+
+    .spec-item {
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 14px 16px;
+      border-radius: var(--radius);
+    }
+
+    .spec-item .num {
+      font-weight: 700;
+      color: #4ade80;
+      font-size: 1.15rem;
+    }
+
+    .spec-item .desc {
+      font-size: 0.8rem;
+      color: var(--muted-foreground);
+      margin-top: 2px;
+    }
+
+    .ram-visual {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px 24px;
+      text-align: center;
+    }
+
+    .ram-circle {
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      background: conic-gradient(#22c55e 0% 12%, #27272a 12% 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+      position: relative;
+    }
+
+    .ram-circle::before {
+      content: '';
+      position: absolute;
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      background: var(--card);
+    }
+
+    .ram-circle span {
+      position: relative;
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #4ade80;
+    }
+
+    .ram-visual p {
+      color: var(--muted-foreground);
+      font-size: 0.85rem;
+    }
+
+    /* Comparison Table */
+    .comparison-table-wrapper {
+      margin-top: 32px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--card);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.9rem;
+    }
+
+    th, td {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.02);
+      font-weight: 600;
+      color: var(--foreground);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .badge-check {
+      color: #4ade80;
+      font-weight: 600;
+    }
+
+    /* Download Box */
+    .cta {
+      text-align: center;
+      padding: 80px 24px;
+    }
+
+    .download-box {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      background: var(--card);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-lg);
+      padding: 36px 40px;
+      max-width: 520px;
+      width: 100%;
+    }
+
+    .download-meta {
+      font-size: 0.825rem;
+      color: var(--muted-foreground);
+      line-height: 1.5;
+    }
+
+    .download-links {
+      display: flex;
+      gap: 16px;
+      margin-top: 8px;
+      font-size: 0.85rem;
+    }
+
+    .download-links a {
+      color: #60a5fa;
+      transition: color 0.15s;
+    }
+
+    .download-links a:hover {
+      text-decoration: underline;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 24px;
+      text-align: center;
+    }
+
+    footer p {
+      color: var(--muted-foreground);
+      font-size: 0.825rem;
+    }
+
+    footer a {
+      color: var(--muted-foreground);
+      transition: color 0.15s;
+    }
+
+    footer a:hover {
+      color: var(--foreground);
+    }
+
+    @media (max-width: 768px) {
+      .highlight-inner {
+        grid-template-columns: 1fr;
+      }
+
+      .highlight-specs {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      nav {
+        display: none;
+      }
+
+      .hero {
+        padding: 110px 16px 50px;
+      }
+
+      .hero-stats {
+        gap: 24px;
+      }
+
+      .download-box {
+        padding: 24px 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="header-inner">
+      <a href="#" class="logo">
+        <div class="logo-icon">H</div>
+        <span>HoyuKey</span>
+      </a>
+      <nav>
+        <a href="#features">Tính năng</a>
+        <a href="#performance">Hiệu năng</a>
+        <a href="#download">Tải xuống</a>
+        <a href="https://github.com/hoyuuna/HoyuKey" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+      <div class="header-actions">
+        <a href="#download" class="btn btn-primary download-btn">
+          <span>Tải xuống</span>
+          <span class="version-tag" style="opacity: 0.7; font-size: 0.8rem;">v1.1.7</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="badge">
+      <span class="badge-dot"></span>
+      <span>Viết bằng Rust · Tiêu thụ ~2MB RAM</span>
+    </div>
+    <h1>Bộ gõ tiếng Việt<br><span>gọn nhẹ và chính xác</span> cho Windows</h1>
+    <p>HoyuKey xử lý chuẩn ngữ âm Telex và VNI, không bị lỗi nuốt chữ trên trình duyệt, tự động khôi phục từ tiếng Anh khi gõ phím cách và chạy mượt mà trên mọi máy tính.</p>
+    
+    <div class="hero-actions">
+      <a href="https://github.com/hoyuuna/HoyuKey/releases/latest/download/HoyuKey.exe" class="btn btn-primary btn-lg download-btn" id="hero-download-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        <span>Tải cho Windows x64</span>
+        <span class="version-tag" style="font-size: 0.825rem; opacity: 0.75; margin-left: 4px;">v1.1.7</span>
+      </a>
+      <a href="https://github.com/hoyuuna/HoyuKey" target="_blank" rel="noopener" class="btn btn-outline btn-lg">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </div>
+
+    <div class="hero-stats">
+      <div class="stat">
+        <div class="stat-value">&lt; 2 MB</div>
+        <div class="stat-label">RAM khi chạy nền</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">0 ms</div>
+        <div class="stat-label">Độ trễ gõ phím</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">Rust</div>
+        <div class="stat-label">An toàn bộ nhớ, không runtime</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Grid -->
+  <section id="features">
+    <div class="container">
+      <div class="section-header">
+        <h2>Xử lý tiếng Việt chuẩn xác</h2>
+        <p>Tập trung giải quyết các lỗi cố hữu của các bộ gõ truyền thống khi làm việc trên trình duyệt và ứng dụng hiện đại.</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+          </div>
+          <h3>Telex, VNI &amp; Telex giản lược</h3>
+          <p>Hỗ trợ đầy đủ các kiểu gõ phổ biến. Khả năng bỏ dấu tự do, đặt dấu theo chuẩn mới (oà, uý) hoặc chuẩn cũ, và cho phép sửa dấu trực tiếp trong từ.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3>Nhận diện tiếng Anh thông minh</h3>
+          <p>Tự động phát hiện âm cuối phi tiếng Việt để khóa phím dấu. Khi gõ các từ như <code>reverse</code>, <code>server</code>, <code>develop</code>, phím cách sẽ tự hoàn tác về đúng từ tiếng Anh gốc.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+          </div>
+          <h3>Tương thích thanh địa chỉ trình duyệt</h3>
+          <p>Khắc phục triệt để lỗi mất chữ, nuốt ký tự đầu và nhảy con trỏ khi tìm kiếm trên thanh URL của Chrome, Edge, Brave, Opera.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>
+          </div>
+          <h3>Tự động viết hoa &amp; chấm câu</h3>
+          <p>Tùy chọn tự viết hoa chữ cái đầu dòng, tự viết hoa sau dấu chấm câu (. ? !) và tự thêm dấu chấm kết thúc câu khi nhấn Enter xuống dòng.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </div>
+          <h3>Ghi nhớ chế độ theo từng ứng dụng</h3>
+          <p>Tự động lưu trạng thái gõ (Việt hoặc Anh) riêng cho từng cửa sổ. Ví dụ: giữ tiếng Anh khi làm việc trong VS Code và tự chuyển tiếng Việt khi sang Slack hoặc trình duyệt.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+          </div>
+          <h3>Giao diện tối giản, vẽ bằng GDI+</h3>
+          <p>Bảng điều khiển lấy cảm hứng từ shadcn/ui, vẽ trực tiếp bằng Windows GDI+ với ClearType chống răng cưa. Không dùng WebView2 hay Electron, khởi chạy tức thì.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Performance Comparison -->
+  <section class="highlight" id="performance">
+    <div class="container">
+      <div class="highlight-inner">
+        <div class="highlight-content">
+          <h2>Tối ưu tài nguyên hệ thống</h2>
+          <p>Các bộ gõ hiện đại thường tích hợp WebView hoặc Electron khiến bộ nhớ tăng lên hàng chục megabyte. HoyuKey được viết bằng Rust thuần, giao tiếp trực tiếp với Windows API qua Low-Level Keyboard Hook, duy trì mức tiêu thụ RAM dưới 2MB suốt quá trình sử dụng.</p>
+
+          <div class="highlight-specs">
+            <div class="spec-item">
+              <div class="num">&lt; 2 MB</div>
+              <div class="desc">Bộ nhớ làm việc (Working Set)</div>
+            </div>
+            <div class="spec-item">
+              <div class="num">0 dependencies</div>
+              <div class="desc">Lõi xử lý độc lập, không runtime bên ngoài</div>
+            </div>
+            <div class="spec-item">
+              <div class="num">60 FPS</div>
+              <div class="desc">Hiệu ứng chuyển trang mượt mà</div>
+            </div>
+            <div class="spec-item">
+              <div class="num">Tự dọn RAM</div>
+              <div class="desc">Tự thu hồi vùng nhớ không dùng định kỳ</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ram-visual">
+          <div class="ram-circle">
+            <span>&lt;2</span>
+          </div>
+          <p>MB RAM tiêu thụ khi chạy nền</p>
+        </div>
+      </div>
+
+      <div class="comparison-table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Tiêu chí</th>
+              <th>HoyuKey</th>
+              <th>Bộ gõ thông thường</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Mức tiêu thụ RAM</td>
+              <td><span class="badge-check">~1.5 – 2 MB</span></td>
+              <td>15 – 80 MB (tùy nền tảng)</td>
+            </tr>
+            <tr>
+              <td>Giao diện cài đặt</td>
+              <td><span class="badge-check">GDI+ Native ClearType</span></td>
+              <td>WinForms cũ hoặc WebView2 nặng</td>
+            </tr>
+            <tr>
+              <td>Gõ từ tiếng Anh (reverse, server...)</td>
+              <td><span class="badge-check">Tự động khôi phục từ gốc</span></td>
+              <td>Dễ dính dấu hoặc phải xóa gõ lại</td>
+            </tr>
+            <tr>
+              <td>Thanh URL trình duyệt</td>
+              <td><span class="badge-check">Đã xử lý cơ chế 0x202F</span></td>
+              <td>Hay nuốt chữ, mất dấu</td>
+            </tr>
+            <tr>
+              <td>Nhớ chế độ theo ứng dụng</td>
+              <td><span class="badge-check">Có sẵn</span></td>
+              <td>Chỉ có ở một số bộ gõ</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download CTA -->
+  <section class="cta" id="download">
+    <div class="container">
+      <div class="download-box">
+        <h2 style="font-size: 1.6rem; letter-spacing: -0.02em;">Tải xuống HoyuKey</h2>
+        <p style="color: var(--muted-foreground); font-size: 0.925rem;">Chạy ngay không cần cài đặt. Tương thích Windows 10 và Windows 11 (64-bit).</p>
+        
+        <a href="https://github.com/hoyuuna/HoyuKey/releases/latest/download/HoyuKey.exe" class="btn btn-primary btn-lg download-btn" id="main-download-btn" style="width: 100%;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          <span>Tải HoyuKey.exe</span>
+          <span class="version-tag" style="opacity: 0.75; font-size: 0.85rem; margin-left: 4px;">v1.1.7</span>
+        </a>
+
+        <div class="download-meta" id="download-meta-text">
+          Phiên bản <span class="version-tag">v1.1.7</span> · Windows 10/11 x64 · ~2.5 MB · Mã nguồn mở
+        </div>
+
+        <div class="download-links">
+          <a href="https://github.com/hoyuuna/HoyuKey/releases" target="_blank" rel="noopener">Tất cả bản phát hành</a>
+          <span style="color: var(--border-strong);">·</span>
+          <a href="https://github.com/hoyuuna/HoyuKey" target="_blank" rel="noopener">Mã nguồn trên GitHub</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>© 2026 HoyuKey. Phát triển bởi Hoyuuna dưới giấy phép mã nguồn mở.</p>
+      <p style="margin-top: 8px;">
+        <a href="https://github.com/hoyuuna/HoyuKey" target="_blank" rel="noopener">GitHub</a> · 
+        <a href="https://github.com/hoyuuna/HoyuKey/issues" target="_blank" rel="noopener">Báo lỗi</a> · 
+        <a href="https://github.com/hoyuuna/HoyuKey/releases" target="_blank" rel="noopener">Lịch sử cập nhật</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    // Tự động lấy số phiên bản mới nhất từ GitHub Releases API
+    (async function fetchReleaseInfo() {
+      try {
+        const res = await fetch('https://api.github.com/repos/hoyuuna/HoyuKey/releases/latest');
+        if (!res.ok) return;
+        const data = await res.json();
+        const tag = data.tag_name;
+        if (!tag) return;
+
+        // Cập nhật tag phiên bản trên các nút tải và text
+        document.querySelectorAll('.version-tag').forEach(function(el) {
+          el.textContent = tag;
+        });
+
+        // Tìm file binary HoyuKey.exe để lấy dung lượng thực tế
+        if (data.assets && Array.isArray(data.assets)) {
+          const exe = data.assets.find(function(a) { return a.name === 'HoyuKey.exe'; });
+          if (exe && exe.size) {
+            const mb = (exe.size / (1024 * 1024)).toFixed(1);
+            const meta = document.getElementById('download-meta-text');
+            if (meta) {
+              meta.textContent = 'Phiên bản ' + tag + ' · Windows 10/11 x64 · ' + mb + ' MB · Mã nguồn mở';
+            }
+          }
+        }
+      } catch (err) {
+        // Giữ fallback tĩnh nếu không kết nối được API
+      }
+    })();
+  </script>
+</body>
+</html>

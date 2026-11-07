@@ -7,6 +7,7 @@ on:
       - '**.md'
       - '.gitignore'
       - 'LICENSE'
+      - 'web/**'
   workflow_dispatch:
 
 permissions:
