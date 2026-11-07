@@ -95,6 +95,7 @@ impl Engine {
         self.has_transformed = false;
         self.history.clear();
         self.last_word_before_space = None;
+        self.line_words.clear();
         self.caret_offset = None;
         self.has_space_before = false;
         self.caret_needs_check = false;
@@ -436,6 +437,46 @@ impl Engine {
             let candidate_restored = format!("{}{}", self.raw_keys, ch);
             let candidate_with_ch = format!("{}{}", self.current_word, ch);
 
+            // NGUYÊN TẮC BẢO VỆ TỪ TIẾNG VIỆT HOÀN CHỈNH:
+            // Nếu từ hiện tại (self.current_word) đã là một từ/âm tiết tiếng Việt hoàn chỉnh và hợp lệ
+            // (ví dụ: 'tôi', 'chào', 'học', 'người', 'biết'...),
+            // và phím mới gõ (ch) không thể kết hợp vào từ này, đồng thời candidate_restored không phải
+            // là một từ tiếng Anh đặc trưng kết thúc bằng phụ âm kép (như test, fast, cash, post...):
+            // TUYỆT ĐỐI KHÔNG auto-restore phá hủy từ tiếng Việt đã gõ!
+            // Thay vào đó: hoàn thành từ hiện tại và bắt đầu âm tiết mới với phím ch.
+            let is_curr_valid = is_valid_vietnamese_syllable(&self.current_word);
+            if is_curr_valid && !crate::phonotactics::is_english_foreign_word(&candidate_restored) {
+                let lower_restored = candidate_restored.to_lowercase();
+                let ends_with_eng = [
+                    "st", "sk", "sp", "ft", "ct", "pt", "lt", "mp", "nd", "nk", "nt",
+                    "rk", "rd", "rm", "rn", "rp", "rs", "tch", "ts", "ff", "ss", "ll", "ck", "sh",
+                ]
+                .iter()
+                .any(|&c| lower_restored.ends_with(c));
+
+                if !ends_with_eng {
+                    self.line_words.push(TypedWord {
+                        word: self.current_word.clone(),
+                        raw: self.raw_keys.clone(),
+                        transformed: self.has_transformed,
+                        was_line_start: self.was_at_line_start,
+                        was_sentence_start: self.was_at_sentence_start,
+                        spaces_after: 0,
+                    });
+                    self.current_word = ch.to_string();
+                    self.raw_keys = ch.to_string();
+                    self.has_transformed = false;
+                    self.history.clear();
+                    self.history.push(EngineStep {
+                        display_word: self.current_word.clone(),
+                        raw_keys: self.raw_keys.clone(),
+                        has_transformed: false,
+                    });
+                    self.last_char_typed = Some(ch);
+                    return KeyAction::PassThrough;
+                }
+            }
+
             if should_auto_restore_english(&candidate_with_ch, &candidate_restored) {
                 let delta = compute_minimal_delta(&self.current_word, &candidate_restored);
                 self.current_word = candidate_restored.clone();
@@ -745,6 +786,24 @@ mod tests {
             engine.process_char(c, &config);
         }
         assert_eq!(engine.current_word, "đây");
+        engine.reset();
+
+        // 5. Kiểm tra trường hợp sửa từ sau khoảng trắng không bị nuốt từ và không bị đổi sang tiếng Anh:
+        // Gõ "tôi" -> cách -> backspace xóa dấu cách -> gõ tiếp 'b'
+        for c in "tooi".chars() {
+            engine.process_char(c, &config);
+        }
+        assert_eq!(engine.current_word, "tôi");
+        // Gõ phím cách
+        engine.process_char(' ', &config);
+        assert!(engine.current_word.is_empty());
+        // Nhấn Backspace xóa dấu cách, lùi về từ trước
+        engine.handle_backspace(config.simple_telex);
+        assert_eq!(engine.current_word, "tôi");
+        // Gõ tiếp 'b': Không được auto-restore làm hỏng "tôi", mà phải pass-through và bắt đầu âm tiết mới
+        let action = engine.process_char('b', &config);
+        assert_eq!(action, KeyAction::PassThrough);
+        assert_eq!(engine.current_word, "b");
     }
 
     #[test]
