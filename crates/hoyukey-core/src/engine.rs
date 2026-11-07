@@ -283,7 +283,32 @@ impl Engine {
         self.spaces_after_word = 0;
         self.has_space_before = false;
 
-        // 3. Thá»±c hiá»‡n biáº¿n Ä‘á»•i dá»±a trÃªn phÃ­m gÃµ
+        // Chuẩn OpenKey / UniKey (Standalone W Invariant):
+        // 'w' đứng một mình biến thành 'ư'. Nhưng trong tiếng Việt KHÔNG CÓ từ nào bắt đầu bằng 'ưi', 'ưe', 'ưo'
+        // Khi theo sau là nguyên âm 'i', 'e', 'o' (như win, wifi, wisconsin, web, welcome, word, world),
+        // lập tức khôi phục 'ư' trở lại thành 'w' + nguyên âm đó!
+        if (self.current_word == "ư" || self.current_word == "Ư")
+            && self.raw_keys.eq_ignore_ascii_case("w")
+            && matches!(ch.to_ascii_lowercase(), 'i' | 'e' | 'o')
+        {
+            let restored = format!("{}{}", self.raw_keys, ch);
+            let delta = compute_minimal_delta(&self.current_word, &restored);
+            self.current_word = restored.clone();
+            self.raw_keys = restored.clone();
+            self.has_transformed = false;
+            self.history.clear();
+            self.history.push(EngineStep {
+                display_word: self.current_word.clone(),
+                raw_keys: self.raw_keys.clone(),
+                has_transformed: false,
+            });
+            return KeyAction::Transform {
+                backspaces: delta.backspaces,
+                text: delta.text,
+            };
+        }
+
+        // 3. Thực hiện biến đổi dựa trên phím gõ
         let transformed = match config.input_method {
             InputMethod::Telex => telex::transform_telex(
                 &self.current_word,
@@ -310,9 +335,15 @@ impl Engine {
                 let delta = compute_minimal_delta(&self.current_word, &new_word);
                 self.current_word = new_word.clone();
 
+                let is_double_tap_escape = new_word.ends_with(ch)
+                    && !self.current_word.ends_with(ch)
+                    && self.raw_keys.ends_with(ch);
+
                 let is_still_transformed = has_vietnamese_diacritic(&self.current_word);
                 if is_still_transformed {
-                    self.raw_keys.push(ch);
+                    if !is_double_tap_escape {
+                        self.raw_keys.push(ch);
+                    }
                     self.has_transformed = true;
                 } else {
                     // Người dùng gõ phím lặp lại để thoát dấu (ví dụ: 'té' + 's' -> 'tes', 'đ' + 'd' -> 'dd', 'â' + 'a' -> 'aa')
@@ -995,5 +1026,13 @@ mod tests {
         let mut no_modify_cfg = TypingConfig::default();
         no_modify_cfg.modify_tone_in_word = false;
         assert_eq!(type_with_cfg(&mut engine, "toansf", &no_modify_cfg), "toánf");
+
+        // 9. Kiểm tra standalone 'w' + nguyên âm tiếng Anh (wisconsin, win, web, word...):
+        // Khi gõ 'w' ra 'ư', nhưng gõ tiếp 'i' (như wisconsin) thì lập tức khôi phục thành 'wi'!
+        // Tuyệt đối không bị thành 'ư' -> 'ưi' -> 'ứi' -> 'wissconsin'!
+        assert_eq!(type_with_cfg(&mut engine, "wisconsin", &def_cfg), "wisconsin");
+        assert_eq!(type_with_cfg(&mut engine, "win", &def_cfg), "win");
+        assert_eq!(type_with_cfg(&mut engine, "web", &def_cfg), "web");
+        assert_eq!(type_with_cfg(&mut engine, "word", &def_cfg), "word");
     }
 }
