@@ -437,57 +437,61 @@ impl Engine {
             let candidate_restored = format!("{}{}", self.raw_keys, ch);
             let candidate_with_ch = format!("{}{}", self.current_word, ch);
 
-            // NGUYÊN TẮC BẢO VỆ TỪ TIẾNG VIỆT HOÀN CHỈNH:
-            // Nếu từ hiện tại (self.current_word) đã là một từ/âm tiết tiếng Việt hoàn chỉnh và hợp lệ
-            // (ví dụ: 'tôi', 'chào', 'học', 'người', 'biết'...),
-            // và phím mới gõ (ch) không thể kết hợp vào từ này, đồng thời candidate_restored không phải
-            // là một từ tiếng Anh đặc trưng kết thúc bằng phụ âm kép (như test, fast, cash, post...):
-            // TUYỆT ĐỐI KHÔNG auto-restore phá hủy từ tiếng Việt đã gõ!
-            // Thay vào đó: hoàn thành từ hiện tại và bắt đầu âm tiết mới với phím ch.
-            let is_curr_valid = is_valid_vietnamese_syllable(&self.current_word);
-            if is_curr_valid && !crate::phonotactics::is_english_foreign_word(&candidate_restored) {
-                let lower_restored = candidate_restored.to_lowercase();
-                let ends_with_eng = [
-                    "st", "sk", "sp", "ft", "ct", "pt", "lt", "mp", "nd", "nk", "nt",
-                    "rk", "rd", "rm", "rn", "rp", "rs", "tch", "ts", "ff", "ss", "ll", "ck", "sh",
-                ]
-                .iter()
-                .any(|&c| lower_restored.ends_with(c));
+            // NGUYÊN TẮC BẢO VỆ TỪ TIẾNG VIỆT ĐANG SOẠN THẢO:
+            // Nếu từ ghép với ch (candidate_with_ch) VẪN LÀ MỘT TỪ/ÂM TIẾT TIẾNG VIỆT HỢP LỆ
+            // (ví dụ: 'câ' + 'p' -> 'câp', 'nhâ' + 't' -> 'nhât', 'thâ' + 'y' -> 'thây', 'dâ' + 'u' -> 'dâu', 'â' + 'y' -> 'ây'):
+            // Tuyệt đối không auto-restore và không commit sớm, tiếp tục nhận ký tự vào âm tiết!
+            let is_candidate_valid = is_valid_vietnamese_phonotactics(&candidate_with_ch);
 
-                if !ends_with_eng {
-                    self.line_words.push(TypedWord {
-                        word: self.current_word.clone(),
-                        raw: self.raw_keys.clone(),
-                        transformed: self.has_transformed,
-                        was_line_start: self.was_at_line_start,
-                        was_sentence_start: self.was_at_sentence_start,
-                        spaces_after: 0,
-                    });
-                    self.current_word = ch.to_string();
-                    self.raw_keys = ch.to_string();
+            if !is_candidate_valid {
+                // candidate_with_ch không thể là tiếng Việt (ví dụ: 'tôi' + 'b' -> 'tôib'):
+                // Nếu từ hiện tại (self.current_word) đã là một từ hoàn chỉnh (như 'tôi', 'chào'):
+                // Kiểm tra xem candidate_restored có phải là từ tiếng Anh kết thúc bằng phụ âm kép (như test, fast, cash):
+                let is_curr_valid = is_valid_vietnamese_syllable(&self.current_word);
+                if is_curr_valid && !crate::phonotactics::is_english_foreign_word(&candidate_restored) {
+                    let lower_restored = candidate_restored.to_lowercase();
+                    let ends_with_eng = [
+                        "st", "sk", "sp", "ft", "ct", "pt", "lt", "mp", "nd", "nk", "nt",
+                        "rk", "rd", "rm", "rn", "rp", "rs", "tch", "ts", "ff", "ss", "ll", "ck", "sh",
+                    ]
+                    .iter()
+                    .any(|&c| lower_restored.ends_with(c));
+
+                    if !ends_with_eng {
+                        self.line_words.push(TypedWord {
+                            word: self.current_word.clone(),
+                            raw: self.raw_keys.clone(),
+                            transformed: self.has_transformed,
+                            was_line_start: self.was_at_line_start,
+                            was_sentence_start: self.was_at_sentence_start,
+                            spaces_after: 0,
+                        });
+                        self.current_word = ch.to_string();
+                        self.raw_keys = ch.to_string();
+                        self.has_transformed = false;
+                        self.history.clear();
+                        self.history.push(EngineStep {
+                            display_word: self.current_word.clone(),
+                            raw_keys: self.raw_keys.clone(),
+                            has_transformed: false,
+                        });
+                        self.last_char_typed = Some(ch);
+                        return KeyAction::PassThrough;
+                    }
+                }
+
+                if should_auto_restore_english(&candidate_with_ch, &candidate_restored) {
+                    let delta = compute_minimal_delta(&self.current_word, &candidate_restored);
+                    self.current_word = candidate_restored.clone();
+                    self.raw_keys = candidate_restored.clone();
                     self.has_transformed = false;
                     self.history.clear();
-                    self.history.push(EngineStep {
-                        display_word: self.current_word.clone(),
-                        raw_keys: self.raw_keys.clone(),
-                        has_transformed: false,
-                    });
-                    self.last_char_typed = Some(ch);
-                    return KeyAction::PassThrough;
+
+                    return KeyAction::Transform {
+                        backspaces: delta.backspaces,
+                        text: delta.text,
+                    };
                 }
-            }
-
-            if should_auto_restore_english(&candidate_with_ch, &candidate_restored) {
-                let delta = compute_minimal_delta(&self.current_word, &candidate_restored);
-                self.current_word = candidate_restored.clone();
-                self.raw_keys = candidate_restored.clone();
-                self.has_transformed = false;
-                self.history.clear();
-
-                return KeyAction::Transform {
-                    backspaces: delta.backspaces,
-                    text: delta.text,
-                };
             }
         }
 
@@ -804,6 +808,42 @@ mod tests {
         let action = engine.process_char('b', &config);
         assert_eq!(action, KeyAction::PassThrough);
         assert_eq!(engine.current_word, "b");
+        engine.reset();
+
+        // 6. Kiểm tra các từ có 'â' nhận phụ âm cuối hoặc bán âm cuối rồi nhận dấu thanh:
+        // "cập" -> c, a, a, p, j
+        for c in "caapj".chars() {
+            engine.process_char(c, &config);
+        }
+        assert_eq!(engine.current_word, "cập");
+        engine.reset();
+
+        // "nhật" -> n, h, a, a, t, j
+        for c in "nhaatj".chars() {
+            engine.process_char(c, &config);
+        }
+        assert_eq!(engine.current_word, "nhật");
+        engine.reset();
+
+        // "thấy" -> t, h, a, a, y, s
+        for c in "thaays".chars() {
+            engine.process_char(c, &config);
+        }
+        assert_eq!(engine.current_word, "thấy");
+        engine.reset();
+
+        // "dấu" -> d, a, a, u, s
+        for c in "daaus".chars() {
+            engine.process_char(c, &config);
+        }
+        assert_eq!(engine.current_word, "dấu");
+        engine.reset();
+
+        // "ấy" -> a, a, y, s
+        for c in "aays".chars() {
+            engine.process_char(c, &config);
+        }
+        assert_eq!(engine.current_word, "ấy");
     }
 
     #[test]
