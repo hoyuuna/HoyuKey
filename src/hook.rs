@@ -254,13 +254,13 @@ pub fn on_focus_window_changed(new_hwnd: HWND) {
         return;
     }
 
-    let mut map_lock = APP_INPUT_STATES.lock().unwrap();
+    let mut map_lock = APP_INPUT_STATES.lock().unwrap_or_else(|e| e.into_inner());
     let map = map_lock.get_or_insert_with(HashMap::new);
 
     if let Some(&saved_mode) = map.get(&app_name) {
         if saved_mode != current_enabled {
             {
-                let mut state = GLOBAL_STATE.lock().unwrap();
+                let mut state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
                 state.config.enabled = saved_mode;
                 state.engine.reset();
             }
@@ -308,7 +308,7 @@ pub fn record_current_app_mode(new_enabled: bool) {
                     | "applicationframehost.exe"
             );
             if !is_ignored_app {
-                let mut map_lock = APP_INPUT_STATES.lock().unwrap();
+                let mut map_lock = APP_INPUT_STATES.lock().unwrap_or_else(|e| e.into_inner());
                 let map = map_lock.get_or_insert_with(HashMap::new);
                 map.insert(app_name, new_enabled);
             }
@@ -317,6 +317,20 @@ pub fn record_current_app_mode(new_enabled: bool) {
 }
 
 unsafe extern "system" fn low_level_mouse_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        low_level_mouse_proc_inner(code, wparam, lparam)
+    }));
+    match result {
+        Ok(res) => res,
+        Err(_) => CallNextHookEx(null_mut(), code, wparam, lparam),
+    }
+}
+
+unsafe fn low_level_mouse_proc_inner(
     code: i32,
     wparam: WPARAM,
     lparam: LPARAM,
@@ -343,6 +357,20 @@ unsafe extern "system" fn low_level_mouse_proc(
 }
 
 unsafe extern "system" fn low_level_keyboard_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        low_level_keyboard_proc_inner(code, wparam, lparam)
+    }));
+    match result {
+        Ok(res) => res,
+        Err(_) => CallNextHookEx(null_mut(), code, wparam, lparam),
+    }
+}
+
+unsafe fn low_level_keyboard_proc_inner(
     code: i32,
     wparam: WPARAM,
     lparam: LPARAM,
@@ -378,7 +406,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
         // Náº¿u dÃ¹ng phÃ­m táº¯t Ctrl + Shift: chuyá»ƒn cháº¿ Ä‘á»™ khi ngÆ°á»i dÃ¹ng nháº£ phÃ­m (chuáº©n Windows)
         if is_ctrl_key || is_shift_key {
             let (switch_key, switch_key_enabled, pause_shortcut, pause_shortcut_apps) = {
-                let state = GLOBAL_STATE.lock().unwrap();
+                let state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
                 (
                     state.config.switch_key,
                     state.config.switch_key_enabled,
@@ -445,7 +473,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
         let prev_fg = LAST_FOREGROUND_WINDOW.swap(current_fg, Ordering::SeqCst);
         if prev_fg != 0 && prev_fg != current_fg {
             {
-                let mut state = GLOBAL_STATE.lock().unwrap();
+                let mut state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
                 state.engine.on_window_change();
             }
             on_focus_window_changed(current_fg as HWND);
@@ -455,7 +483,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
     // 4. Kiá»ƒm tra phÃ­m táº¯t chuyá»ƒn Ä‘á»•i cháº¿ Ä‘á»™ V / E
     if is_ctrl_key || is_shift_key || is_z {
         let (switch_key, switch_key_enabled, pause_shortcut, pause_shortcut_apps) = {
-            let state = GLOBAL_STATE.lock().unwrap();
+            let state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
             (
                 state.config.switch_key,
                 state.config.switch_key_enabled,
@@ -518,7 +546,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
         VK_BACK => {
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             {
-                let mut state = GLOBAL_STATE.lock().unwrap();
+                let mut state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
                 let simple_telex = state.config.simple_telex;
                 state.engine.handle_backspace(simple_telex);
                 if state.engine.current_word.is_empty() {
@@ -531,7 +559,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
         VK_RETURN => {
             BLOCKED_VK[vk_idx].store(false, Ordering::SeqCst);
             let auto_dot = {
-                let mut state = GLOBAL_STATE.lock().unwrap();
+                let mut state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
                 let should_dot = state.config.auto_period_enter
                     && state.engine.should_auto_period_before_enter();
                 state.engine.on_enter();
@@ -613,7 +641,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 is_after_whitespace,
                 at_start_of_line,
             ) = {
-                let state = GLOBAL_STATE.lock().unwrap();
+                let state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
                 (
                     state.config.enabled,
                     state.config.dynamic_caret,
@@ -678,11 +706,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
                                 let backspaces = ctx.pre_word.chars().count();
 
                                 {
-                                    let mut state = GLOBAL_STATE.lock().unwrap();
+                                    let mut state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
                                     state.engine.current_word = new_word.clone();
                                     state.engine.raw_keys = new_word.clone();
                                     state.engine.has_transformed = true;
-                                    state.engine.caret_offset = Some(new_word.chars().count() - deletes);
+                                    state.engine.caret_offset = Some(new_word.chars().count().saturating_sub(deletes));
                                     state.engine.caret_needs_check = false;
                                 }
 
@@ -703,7 +731,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
         // Xá»­ lÃ½ biáº¿n Ä‘á»•i kÃ½ tá»± thÃ´ng qua engine (chá»‰ lock 1 láº§n duy nháº¥t, láº¥y káº¿t quáº£ vÃ  má»Ÿ khÃ³a ngay)
         let (action, has_space_before, browser_compatibility, browser_apps) = {
-            let mut state = GLOBAL_STATE.lock().unwrap();
+            let mut state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
             let state = &mut *state;
             let action = if repeat_count >= 3 {
                 state.engine.current_word.push(ch);
@@ -742,7 +770,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
 pub fn toggle_vietnamese_mode() {
     let (hwnd, enabled, notify_toggle) = {
-        let mut state = GLOBAL_STATE.lock().unwrap();
+        let mut state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         state.config.enabled = !state.config.enabled;
         state.config.save();
         state.engine.reset();
@@ -771,7 +799,7 @@ pub fn toggle_vietnamese_mode() {
 }
 
 fn reset_engine() {
-    let mut state = GLOBAL_STATE.lock().unwrap();
+    let mut state = GLOBAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
     state.engine.reset();
     state.engine.line_words.clear();
 }
@@ -1115,8 +1143,8 @@ unsafe fn send_transform_batch(
     backspaces: usize,
     text: &str,
     _has_space_before: bool,
-    browser_compatibility: bool,
-    browser_apps: &str,
+    _browser_compatibility: bool,
+    _browser_apps: &str,
 ) {
     if backspaces == 0 && text.is_empty() {
         return;
@@ -1129,12 +1157,7 @@ unsafe fn send_transform_batch(
     // Kết quả:
     // - Trong Omnibox: xóa sạch gợi ý và chữ cũ, không bị 'aả'!
     // - Trong web content / Facebook: xóa sạch ký tự rỗng và chữ cũ, không bao giờ ăn mất chữ đi trước!
-    let is_browser = browser_compatibility && is_foreground_browser_app(browser_apps);
-    if is_browser && backspaces > 0 {
-        send_replace_batch(0, backspaces + 1, text, Some(0x202F));
-    } else {
-        send_replace_batch(0, backspaces, text, None);
-    }
+    send_replace_batch(0, backspaces, text, None);
 }
 
 const CF_UNICODETEXT: u32 = 13;
