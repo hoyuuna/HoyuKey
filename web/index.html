@@ -69,7 +69,7 @@
       backdrop-filter: blur(0px);
       -webkit-backdrop-filter: blur(0px);
       border-bottom: 1px solid transparent;
-      transition: background 0.3s ease, border-color 0.3s ease, backdrop-filter 0.3s ease, -webkit-backdrop-filter 0.3s ease;
+      transition: background 0.35s ease, border-color 0.35s ease, backdrop-filter 0.35s ease, -webkit-backdrop-filter 0.35s ease;
     }
 
     header.scrolled {
@@ -82,17 +82,46 @@
     .header-inner {
       max-width: 1100px;
       margin: 0 auto;
-      padding: 14px 24px;
+      padding: 0 24px;
+      height: 62px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-end;
+      position: relative;
     }
 
     .logo {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 10px;
       font-size: 1.15rem;
+      text-decoration: none;
+      color: inherit;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1), transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    header.scrolled .logo {
+      left: 24px;
+      transform: translate(0, -50%);
+    }
+
+    .header-btn {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(12px) scale(0.95);
+      transition: opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1), transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    header.scrolled .header-btn {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(0) scale(1);
     }
 
     .logo-img {
@@ -504,9 +533,15 @@
 
     @media (max-width: 640px) {
       .header-inner {
-        padding: 10px 16px;
+        padding: 0 16px;
+        height: 52px;
         width: 100%;
         box-sizing: border-box;
+      }
+
+      header.scrolled .logo {
+        left: 16px;
+        transform: translate(0, -50%);
       }
 
       .logo {
@@ -715,11 +750,11 @@
 <body>
   <header>
     <div class="header-inner">
-      <div class="logo">
+      <a href="#" class="logo" aria-label="HoyuKey">
         <img src="https://i.postimg.cc/jjJ39Z5v/logo.png" alt="HoyuKey Logo" class="logo-img" />
         <span class="logo-text">HOYUKEY</span>
-      </div>
-      <a href="#download" class="btn btn-primary">Tải ngay</a>
+      </a>
+      <a href="#download" class="btn btn-primary header-btn" id="header-download-btn">Tải ngay</a>
     </div>
   </header>
 
@@ -892,7 +927,12 @@
     document.querySelectorAll('a[href^="#"]').forEach(anchor => {
       anchor.addEventListener('click', function (e) {
         const targetId = this.getAttribute('href');
-        if (targetId && targetId !== '#' && targetId.startsWith('#')) {
+        if (targetId === '#') {
+          e.preventDefault();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          return;
+        }
+        if (targetId && targetId.startsWith('#')) {
           const targetEl = document.querySelector(targetId);
           if (targetEl) {
             e.preventDefault();
