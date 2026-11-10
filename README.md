@@ -4,6 +4,9 @@ Bộ gõ tiếng Việt cho Windows được viết bằng Rust.
 
 ---
 
+> [!WARNING]
+> Dự án không còn được cập nhật. Pull request sẽ không còn được duyệt!
+
 ## Tính năng
 
 - **Kiểu gõ**: Hỗ trợ 2 kiểu gõ **Telex** (bao gồm **Telex giản lược**) và **VNI**.
